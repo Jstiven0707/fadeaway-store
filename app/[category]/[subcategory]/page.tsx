@@ -1,18 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import {
-  Product,
-  STORAGE_KEYS,
-  categoryLabel,
-  findSubcategoryByHref,
-  isLaunchHref,
-  menuData,
-  normalizeProduct,
-  readStorage,
-} from '@/lib/menu';
+import { STORAGE_KEYS, categoryLabel, findSubcategoryByHref, isLaunchHref, menuData, readStorage } from '@/lib/menu';
+import { Product, fetchProducts, formatCOP } from '@/lib/products';
 
 interface CartItem {
   id: number | string;
@@ -20,7 +12,7 @@ interface CartItem {
   category: string;
   price: number;
   quantity: number;
-  size?: string; // presentación elegida (se conserva el nombre por el carrito ya guardado)
+  size?: string; // presentación elegida
   image?: string;
 }
 
@@ -33,7 +25,6 @@ export default function SubCategoryPage() {
   const href = `/${categoryRaw.toLowerCase()}/${subcategoryRaw.toLowerCase()}`;
   const categoryKey = categoryRaw.toUpperCase();
 
-  // Nombre oficial del menú; si la URL no existe, se muestra el slug tal cual
   const subcategoryMatch = findSubcategoryByHref(href);
   const isLaunchSection = isLaunchHref(href);
   const categoryName = categoryLabel(categoryKey);
@@ -42,34 +33,28 @@ export default function SubCategoryPage() {
     : subcategoryMatch?.label || decodeURIComponent(subcategoryRaw).toUpperCase();
 
   const [products, setProducts] = useState<Product[]>([]);
-  const [selectedPresentations, setSelectedPresentations] = useState<Record<string, string>>({});
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedPresentations, setSelectedPresentations] = useState<Record<number, string>>({});
   const [addedItemNotice, setAddedItemNotice] = useState<string | null>(null);
   const [cartCount, setCartCount] = useState(0);
 
-  // --- CARGA DE PRODUCTOS CREADOS DESDE EL ADMIN ---
-  const loadProducts = () => {
-    const saved = readStorage(STORAGE_KEYS.products);
-    if (!saved) {
-      setProducts([]);
-      return;
-    }
+  // Los productos ahora viven en MySQL: se piden a /api/products
+  const cargarProductos = useCallback(async () => {
+    setCargando(true);
+    setError(null);
     try {
-      const parsed: Product[] = JSON.parse(saved);
-      const normalized = parsed.map(normalizeProduct);
-
-      const visible = normalized.filter((p) => {
-        if (isLaunchSection) {
-          return p.isNewRelease === true && p.category === categoryKey;
-        }
-        return p.subcategory?.href === href;
-      });
-
-      setProducts(visible);
+      const data = isLaunchSection
+        ? await fetchProducts({ categoria: categoryRaw.toLowerCase(), lanzamientos: true })
+        : await fetchProducts({ href });
+      setProducts(data);
     } catch (e) {
-      console.error('Error leyendo los productos guardados:', e);
-      setProducts([]);
+      console.error('Error cargando productos:', e);
+      setError('No pudimos cargar los productos. Revisa tu conexión e intenta de nuevo.');
+    } finally {
+      setCargando(false);
     }
-  };
+  }, [href, isLaunchSection, categoryRaw]);
 
   const loadCartCount = () => {
     const saved = readStorage(STORAGE_KEYS.cart);
@@ -86,41 +71,38 @@ export default function SubCategoryPage() {
   };
 
   useEffect(() => {
-    loadProducts();
+    cargarProductos();
+  }, [cargarProductos]);
+
+  useEffect(() => {
     loadCartCount();
+    window.addEventListener('storage', loadCartCount);
+    return () => window.removeEventListener('storage', loadCartCount);
+  }, []);
 
-    const handleStorageChange = () => {
-      loadProducts();
-      loadCartCount();
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [href]);
-
-  const handlePresentationChange = (productId: string, presentation: string) => {
+  const handlePresentationChange = (productId: number, presentation: string) => {
     setSelectedPresentations((prev) => ({ ...prev, [productId]: presentation }));
   };
 
-  // Guarda el producto en el carrito compartido con la home
+  // El carrito sigue en el navegador: es de cada visitante hasta que confirma el pedido
   const addToCart = (product: Product) => {
-    const presentation = selectedPresentations[product.id] || product.presentations[0] || 'Único';
-    const cartKey = STORAGE_KEYS.cart;
+    const disponibles = product.presentations.filter((p) => p.stock > 0);
+    const elegida =
+      selectedPresentations[product.id] || disponibles[0]?.nombre || product.presentations[0]?.nombre || 'Único';
 
-    const existingCartRaw = localStorage.getItem(cartKey);
+    const existingCartRaw = readStorage(STORAGE_KEYS.cart);
     let currentCart: CartItem[] = [];
 
     if (existingCartRaw) {
       try {
         currentCart = JSON.parse(existingCartRaw);
       } catch (e) {
-        console.error('Error leyendo localStorage:', e);
+        console.error('Error leyendo el carrito:', e);
       }
     }
 
     const existingIndex = currentCart.findIndex(
-      (item) => item.id === product.id && item.size === presentation
+      (item) => item.id === product.id && item.size === elegida
     );
 
     if (existingIndex > -1) {
@@ -132,29 +114,19 @@ export default function SubCategoryPage() {
         category: product.category,
         price: product.price,
         quantity: 1,
-        size: presentation,
+        size: elegida,
         image: product.image,
       });
     }
 
-    localStorage.setItem(cartKey, JSON.stringify(currentCart));
-
-    // Avisa a la home para que refresque el contador del carrito
+    localStorage.setItem(STORAGE_KEYS.cart, JSON.stringify(currentCart));
     window.dispatchEvent(new Event('storage'));
     loadCartCount();
 
-    setAddedItemNotice(`¡${product.name} (${presentation}) agregado al carrito!`);
+    setAddedItemNotice(`¡${product.name} (${elegida}) agregado al carrito!`);
     setTimeout(() => setAddedItemNotice(null), 3000);
   };
 
-  const formatCOP = (amount: number) =>
-    new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      maximumFractionDigits: 0,
-    }).format(amount);
-
-  // Otras subcategorías de la misma categoría, para seguir explorando
   const siblingLinks = (menuData[categoryKey] || [])
     .flatMap((group) => group.subcategories)
     .filter((sub) => sub.href !== href);
@@ -162,12 +134,10 @@ export default function SubCategoryPage() {
   return (
     <div className="min-h-screen bg-[#F6F6F6] text-neutral-900 font-sans pb-20 relative">
 
-      {/* Banner superior */}
       <div className="bg-neutral-900 text-white text-[11px] font-medium tracking-wide text-center py-2 uppercase">
         Envíos Gratis por compras superiores a $150.000 COP
       </div>
 
-      {/* Header Breve */}
       <header className="bg-white border-b border-neutral-200 py-4 px-6 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <Link href="/" className="text-xs font-bold text-neutral-500 hover:text-black flex items-center gap-1">
@@ -190,7 +160,6 @@ export default function SubCategoryPage() {
         </div>
       </header>
 
-      {/* Alerta flotante cuando agregas un producto */}
       {addedItemNotice && (
         <div className="fixed bottom-6 right-6 z-50 bg-black text-white px-5 py-3 rounded-xl shadow-2xl text-xs font-bold flex items-center gap-2 animate-bounce">
           <span>✓</span>
@@ -200,7 +169,6 @@ export default function SubCategoryPage() {
 
       <main className="max-w-7xl mx-auto px-6 pt-10 space-y-10">
 
-        {/* Título de la Sección */}
         <div className="border-b border-neutral-200 pb-6 flex flex-col md:flex-row justify-between md:items-end gap-4">
           <div>
             <span className="text-[10px] font-bold tracking-widest text-neutral-400 uppercase">
@@ -210,17 +178,38 @@ export default function SubCategoryPage() {
               {subcategoryName}
             </h1>
             <p className="text-xs text-neutral-500 mt-1">
-              {products.length} producto(s) disponible(s)
+              {cargando ? 'Cargando...' : `${products.length} producto(s) disponible(s)`}
             </p>
           </div>
         </div>
 
-        {/* Grilla de Productos */}
-        {products.length > 0 ? (
+        {cargando ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="bg-white p-4 rounded-2xl border border-neutral-200/80 animate-pulse">
+                <div className="aspect-square bg-neutral-200 rounded-xl mb-4" />
+                <div className="h-3 bg-neutral-200 rounded w-3/4 mb-2" />
+                <div className="h-3 bg-neutral-200 rounded w-1/2" />
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <div className="text-center py-16 bg-white rounded-2xl border border-red-200">
+            <span className="text-3xl block mb-3">⚠️</span>
+            <p className="text-sm font-semibold text-neutral-800">{error}</p>
+            <button
+              onClick={cargarProductos}
+              className="inline-block mt-5 bg-black text-white text-xs font-bold uppercase px-6 py-3 rounded-full hover:bg-neutral-800 transition-colors"
+            >
+              Reintentar
+            </button>
+          </div>
+        ) : products.length > 0 ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
             {products.map((item) => {
-              const activePresentation =
-                selectedPresentations[item.id] || item.presentations[0] || 'Único';
+              const disponibles = item.presentations.filter((p) => p.stock > 0);
+              const activa =
+                selectedPresentations[item.id] || disponibles[0]?.nombre || item.presentations[0]?.nombre;
 
               return (
                 <div
@@ -259,26 +248,32 @@ export default function SubCategoryPage() {
                       <p className="text-xs font-bold text-neutral-900">{formatCOP(item.price)}</p>
                     </div>
 
-                    {/* Seleccionar Presentación */}
                     {item.presentations.length > 0 && (
                       <div className="mb-4">
                         <label className="text-[10px] text-neutral-400 font-bold uppercase block mb-1">
                           Presentación:
                         </label>
                         <div className="flex flex-wrap gap-1 text-[10px]">
-                          {item.presentations.map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => handlePresentationChange(item.id, p)}
-                              className={`px-2 py-1 border rounded font-semibold ${
-                                activePresentation === p
-                                  ? 'border-black bg-black text-white'
-                                  : 'border-neutral-200 text-neutral-600 hover:border-neutral-400'
-                              }`}
-                            >
-                              {p}
-                            </button>
-                          ))}
+                          {item.presentations.map((p) => {
+                            const agotada = p.stock <= 0;
+                            return (
+                              <button
+                                key={p.nombre}
+                                onClick={() => handlePresentationChange(item.id, p.nombre)}
+                                disabled={agotada}
+                                title={agotada ? 'Sin stock' : `${p.stock} disponibles`}
+                                className={`px-2 py-1 border rounded font-semibold transition-colors ${
+                                  agotada
+                                    ? 'border-neutral-100 text-neutral-300 line-through cursor-not-allowed'
+                                    : activa === p.nombre
+                                      ? 'border-black bg-black text-white'
+                                      : 'border-neutral-200 text-neutral-600 hover:border-neutral-400'
+                                }`}
+                              >
+                                {p.nombre}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -313,7 +308,6 @@ export default function SubCategoryPage() {
           </div>
         )}
 
-        {/* Seguir explorando la misma categoría */}
         {siblingLinks.length > 0 && (
           <section className="bg-white p-6 rounded-2xl border border-neutral-200/80">
             <h2 className="text-[10px] font-bold tracking-widest text-neutral-400 uppercase mb-4">

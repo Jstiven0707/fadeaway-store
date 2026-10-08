@@ -1,19 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   CATEGORIES_PRINCIPALES,
-  Product,
   STORAGE_KEYS,
   categoryLabel,
   getDefaultPresentations,
   getSubcategoriesForCategory,
-  normalizeProduct,
   readStorage,
 } from '@/lib/menu';
+import {
+  Presentacion,
+  Product,
+  createProduct,
+  deleteProduct,
+  fetchProducts,
+  updateProduct,
+  uploadProductImage,
+} from '@/lib/products';
 
 // --- INTERFACES DE PEDIDOS ---
-// El menú y el tipo Product viven en lib/menu.ts (fuente única de verdad).
+// El menú vive en lib/menu.ts; el tipo Product y el cliente de la API en lib/products.ts.
 interface OrderItem {
   id: number | string;
   name: string;
@@ -42,21 +49,12 @@ interface Order {
   status: 'Pendiente' | 'Pagado' | 'Enviado' | 'Cancelado';
 }
 
-const INITIAL_PRODUCTS: Product[] = [
-  {
-    id: 'PROD-001',
-    name: 'Eau de Parfum Oceanpark Night',
-    category: 'PERFUMERIA',
-    subcategory: { name: 'Para Ella', href: '/perfumeria/mujer', image: '/logo-mark.png' },
-    price: 120000,
-    description: 'Fragancia floral amaderada de alta fijación, hasta 10 horas de duración.',
-    presentations: ['30ml', '50ml', '100ml'],
-    image: '/logo-mark.png',
-    stock: 15,
-    status: 'Disponible',
-    isNewRelease: true,
-  },
-];
+/** Presentaciones sugeridas al crear un producto, segun la categoria. */
+const presentacionesPorDefecto = (categoria: string): Presentacion[] =>
+  getDefaultPresentations(categoria)
+    .split(',')
+    .map((nombre) => ({ nombre: nombre.trim(), stock: 0 }))
+    .filter((p) => p.nombre.length > 0);
 
 export default function AdminDashboard() {
   // 1. ESTADOS DE AUTENTICACIÓN Y NAVEGACIÓN
@@ -81,15 +79,19 @@ export default function AdminDashboard() {
     category: 'PERFUMERIA',
     subcategoryName: '',
     subcategoryHref: '',
-    subcategoryImage: '',
     price: '',
     description: '',
-    presentations: getDefaultPresentations('PERFUMERIA'),
+    presentations: presentacionesPorDefecto('PERFUMERIA'),
     image: '',
-    stock: '',
-    status: 'Disponible' as 'Disponible' | 'Agotado',
     isNewRelease: false,
   });
+  const [guardando, setGuardando] = useState(false);
+  const [errorForm, setErrorForm] = useState<string | null>(null);
+  const [subiendoImagen, setSubiendoImagen] = useState(false);
+
+  // Estado de la carga de productos desde la base
+  const [cargandoProductos, setCargandoProductos] = useState(true);
+  const [errorProductos, setErrorProductos] = useState<string | null>(null);
 
   // 3. ESTADO DE VENTA MANUAL POR REDES SOCIALES
   const [isManualSaleOpen, setIsManualSaleOpen] = useState(false);
@@ -117,22 +119,25 @@ export default function AdminDashboard() {
       }
     }
 
-    const savedProducts = readStorage(STORAGE_KEYS.products);
-    if (savedProducts) {
-      try {
-        const parsed: Product[] = JSON.parse(savedProducts);
-        const normalized = parsed.map(normalizeProduct);
-        setProducts(normalized);
-        // Guardamos la versión migrada para que el home también la lea corregida
-        localStorage.setItem(STORAGE_KEYS.products, JSON.stringify(normalized));
-      } catch (e) {
-        console.error(e);
-      }
-    } else {
-      setProducts(INITIAL_PRODUCTS);
-      localStorage.setItem(STORAGE_KEYS.products, JSON.stringify(INITIAL_PRODUCTS));
+  }, []);
+
+  // Los productos viven en MySQL: se piden a /api/products
+  const cargarProductos = useCallback(async () => {
+    setCargandoProductos(true);
+    setErrorProductos(null);
+    try {
+      setProducts(await fetchProducts({ limit: 100 }));
+    } catch (e) {
+      console.error('Error cargando el catalogo:', e);
+      setErrorProductos('No se pudo cargar el catálogo desde la base de datos.');
+    } finally {
+      setCargandoProductos(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) cargarProductos();
+  }, [isAuthenticated, cargarProductos]);
 
   const saveOrders = (updated: Order[]) => {
     setOrders(updated);
@@ -141,18 +146,6 @@ export default function AdminDashboard() {
     } catch (e) {
       console.error('No se pudieron guardar los pedidos:', e);
       alert('No se pudieron guardar los pedidos: el almacenamiento del navegador está lleno.');
-    }
-  };
-
-  const saveProducts = (updated: Product[]) => {
-    setProducts(updated);
-    try {
-      localStorage.setItem(STORAGE_KEYS.products, JSON.stringify(updated));
-    } catch (e) {
-      console.error('No se pudieron guardar los productos:', e);
-      alert(
-        'No se pudo guardar: el almacenamiento del navegador está lleno. Usa imágenes más pequeñas o una URL en vez de subir el archivo.'
-      );
     }
   };
 
@@ -184,13 +177,12 @@ export default function AdminDashboard() {
         category: product.category || 'PERFUMERIA',
         subcategoryName: product.subcategory?.name || '',
         subcategoryHref: product.subcategory?.href || '',
-        subcategoryImage: product.subcategory?.image || '',
         price: product.price.toString(),
         description: product.description || '',
-        presentations: product.presentations.join(', '),
+        presentations: product.presentations.length
+          ? product.presentations.map((p) => ({ ...p }))
+          : presentacionesPorDefecto(product.category),
         image: product.image,
-        stock: product.stock.toString(),
-        status: product.status,
         isNewRelease: product.isNewRelease || false,
       });
     } else {
@@ -203,16 +195,14 @@ export default function AdminDashboard() {
         category: 'PERFUMERIA',
         subcategoryName: initialSub?.label || '',
         subcategoryHref: initialSub?.href || '',
-        subcategoryImage: '',
         price: '',
         description: '',
-        presentations: getDefaultPresentations('PERFUMERIA'),
+        presentations: presentacionesPorDefecto('PERFUMERIA'),
         image: '',
-        stock: '10',
-        status: 'Disponible',
         isNewRelease: false,
       });
     }
+    setErrorForm(null);
     setIsProductModalOpen(true);
   };
 
@@ -226,7 +216,7 @@ export default function AdminDashboard() {
       subcategoryName: firstSub?.label || '',
       subcategoryHref: firstSub?.href || '',
       // Al crear un producto nuevo sugerimos la presentación típica de la categoría
-      presentations: editingProduct ? prev.presentations : getDefaultPresentations(newCat),
+      presentations: editingProduct ? prev.presentations : presentacionesPorDefecto(newCat),
     }));
   };
 
@@ -241,62 +231,94 @@ export default function AdminDashboard() {
     }));
   };
 
-  const handleImageUpload = (
-    e: React.ChangeEvent<HTMLInputElement>,
-    field: 'image' | 'subcategoryImage'
-  ) => {
+  // La foto se sube al servidor y en el formulario queda solo su ruta.
+  // Antes se guardaba el archivo entero en base64 dentro del navegador.
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProductForm((prev) => ({ ...prev, [field]: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    setSubiendoImagen(true);
+    setErrorForm(null);
+    try {
+      const url = await uploadProductImage(file);
+      setProductForm((prev) => ({ ...prev, image: url }));
+    } catch (error) {
+      setErrorForm((error as Error).message);
+    } finally {
+      setSubiendoImagen(false);
+      e.target.value = '';
     }
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  // --- EDICION DE PRESENTACIONES (cada una con su propio stock) ---
+  const cambiarPresentacion = (indice: number, campo: keyof Presentacion, valor: string) => {
+    setProductForm((prev) => ({
+      ...prev,
+      presentations: prev.presentations.map((p, i) =>
+        i === indice
+          ? { ...p, [campo]: campo === 'stock' ? Math.max(0, Math.trunc(Number(valor) || 0)) : valor }
+          : p
+      ),
+    }));
+  };
+
+  const agregarPresentacion = () => {
+    setProductForm((prev) => ({
+      ...prev,
+      presentations: [...prev.presentations, { nombre: '', stock: 0 }],
+    }));
+  };
+
+  const quitarPresentacion = (indice: number) => {
+    setProductForm((prev) => ({
+      ...prev,
+      presentations: prev.presentations.filter((_, i) => i !== indice),
+    }));
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (guardando) return;
 
     // Si el select quedó vacío o con un valor inválido, recalculamos el href desde el menú
     const subs = getSubcategoriesForCategory(productForm.category);
     const matchedSub = subs.find((s) => s.label === productForm.subcategoryName);
     const finalHref = matchedSub?.href || productForm.subcategoryHref;
 
-    const newProduct: Product = {
-      id: editingProduct ? editingProduct.id : `PROD-${Date.now().toString().slice(-4)}`,
+    const entrada = {
+      subcategoryHref: finalHref,
       name: productForm.name,
-      category: productForm.category,
-      subcategory: productForm.subcategoryName
-        ? {
-            name: productForm.subcategoryName,
-            href: finalHref,
-            image: productForm.subcategoryImage || undefined,
-          }
-        : undefined,
-      price: Number(productForm.price),
       description: productForm.description,
-      presentations: productForm.presentations
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-      image: productForm.image || '/logo-mark.png',
-      stock: Number(productForm.stock),
-      status: Number(productForm.stock) <= 0 ? 'Agotado' : productForm.status,
+      price: Number(productForm.price),
+      image: productForm.image,
       isNewRelease: productForm.isNewRelease === true,
+      presentations: productForm.presentations.filter((p) => p.nombre.trim().length > 0),
     };
 
-    const updated = editingProduct
-      ? products.map((p) => (p.id === editingProduct.id ? newProduct : p))
-      : [newProduct, ...products];
-
-    saveProducts(updated);
-    setIsProductModalOpen(false);
+    setGuardando(true);
+    setErrorForm(null);
+    try {
+      if (editingProduct) {
+        await updateProduct(editingProduct.id, entrada);
+      } else {
+        await createProduct(entrada);
+      }
+      await cargarProductos();
+      setIsProductModalOpen(false);
+    } catch (error) {
+      setErrorForm((error as Error).message);
+    } finally {
+      setGuardando(false);
+    }
   };
 
-  const handleDeleteProduct = (id: string) => {
-    if (confirm('¿Deseas eliminar este producto del catálogo definitivamente?')) {
-      saveProducts(products.filter((p) => p.id !== id));
+  const handleDeleteProduct = async (id: number) => {
+    if (!confirm('¿Deseas retirar este producto del catálogo?')) return;
+    try {
+      await deleteProduct(id);
+      await cargarProductos();
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
@@ -308,17 +330,26 @@ export default function AdminDashboard() {
   };
 
   // REGISTRAR VENTA MANUAL POR CHAT (WHATSAPP / REDES)
-  const handleRegisterManualSale = (e: React.FormEvent) => {
+  const handleRegisterManualSale = async (e: React.FormEvent) => {
     e.preventDefault();
-    const targetProduct = products.find((p) => p.id === manualSaleForm.productId);
+    const targetProduct = products.find((p) => String(p.id) === manualSaleForm.productId);
     if (!targetProduct) {
       alert('Selecciona un producto válido');
       return;
     }
 
+    // El stock vive por presentacion, asi que se descuenta de la elegida
+    const presentacion = targetProduct.presentations.find(
+      (pres) => pres.nombre === manualSaleForm.size
+    );
+    if (!presentacion) {
+      alert('Selecciona una presentación válida');
+      return;
+    }
+
     const qty = Number(manualSaleForm.quantity);
-    if (targetProduct.stock < qty) {
-      alert(`Stock insuficiente. Quedan ${targetProduct.stock} unidades disponibles.`);
+    if (presentacion.stock < qty) {
+      alert(`Stock insuficiente. Quedan ${presentacion.stock} unidades de ${presentacion.nombre}.`);
       return;
     }
 
@@ -353,19 +384,25 @@ export default function AdminDashboard() {
       status: 'Pagado',
     };
 
-    const updatedProducts = products.map((p) => {
-      if (p.id === targetProduct.id) {
-        const newStock = p.stock - qty;
-        return {
-          ...p,
-          stock: newStock,
-          status: newStock <= 0 ? ('Agotado' as const) : p.status,
-        };
-      }
-      return p;
-    });
+    // Se descuenta el stock en la base de datos antes de registrar la venta
+    try {
+      await updateProduct(targetProduct.id, {
+        subcategoryHref: targetProduct.subcategory.href,
+        name: targetProduct.name,
+        description: targetProduct.description,
+        price: targetProduct.price,
+        image: targetProduct.image,
+        isNewRelease: targetProduct.isNewRelease,
+        presentations: targetProduct.presentations.map((pres) =>
+          pres.nombre === presentacion.nombre ? { ...pres, stock: pres.stock - qty } : pres
+        ),
+      });
+      await cargarProductos();
+    } catch (error) {
+      alert(`No se pudo descontar el stock: ${(error as Error).message}`);
+      return;
+    }
 
-    saveProducts(updatedProducts);
     saveOrders([newOrder, ...orders]);
     setIsManualSaleOpen(false);
 
@@ -384,6 +421,10 @@ export default function AdminDashboard() {
 
     alert('Venta registrada con éxito y stock actualizado.');
   };
+
+  // Presentaciones del producto elegido en la venta manual
+  const presentacionesDelProductoElegido =
+    products.find((p) => String(p.id) === manualSaleForm.productId)?.presentations ?? [];
 
   const filteredOrders = orders.filter((order) => {
     if (filterStatus === 'TODOS') return true;
@@ -694,7 +735,11 @@ export default function AdminDashboard() {
                     {products.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="text-center py-8 text-neutral-400">
-                          No hay productos registrados en el catálogo.
+                          {cargandoProductos
+                            ? 'Cargando catálogo desde la base de datos...'
+                            : errorProductos
+                              ? errorProductos
+                              : 'No hay productos registrados en el catálogo.'}
                         </td>
                       </tr>
                     ) : (
@@ -723,37 +768,29 @@ export default function AdminDashboard() {
                           </td>
                           <td className="p-4 text-neutral-600">
                             <span className="font-bold text-neutral-900">{categoryLabel(prod.category)}</span>
-                            {prod.subcategory ? (
-                              <div className="flex items-center gap-1.5 mt-1">
-                                {prod.subcategory.image && (
-                                  <img
-                                    src={prod.subcategory.image}
-                                    alt={prod.subcategory.name}
-                                    className="h-4 w-4 rounded object-cover border border-neutral-200"
-                                  />
-                                )}
-                                <span className="text-[10px] font-bold text-neutral-600 bg-neutral-100 px-1.5 py-0.5 rounded">
-                                  {prod.subcategory.name}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="mt-1">
-                                <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                                  Sin subcategoría: edítalo
-                                </span>
-                              </div>
-                            )}
+                            <div className="mt-1">
+                              <span className="text-[10px] font-bold text-neutral-600 bg-neutral-100 px-1.5 py-0.5 rounded">
+                                {prod.subcategory.name}
+                              </span>
+                            </div>
                           </td>
                           <td className="p-4 font-bold text-neutral-900">{formatCOP(prod.price)}</td>
                           <td className="p-4">
-                            {prod.presentations.map((s) => (
-                              <span
-                                key={s}
-                                className="inline-block bg-neutral-100 border border-neutral-200 px-1.5 py-0.5 rounded text-[10px] font-bold mr-1"
-                              >
-                                {s}
-                              </span>
-                            ))}
+                            <div className="flex flex-wrap gap-1">
+                              {prod.presentations.map((pres) => (
+                                <span
+                                  key={pres.nombre}
+                                  title={`${pres.stock} en inventario`}
+                                  className={`inline-block border px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    pres.stock > 0
+                                      ? 'bg-neutral-100 border-neutral-200 text-neutral-700'
+                                      : 'bg-red-50 border-red-200 text-red-600'
+                                  }`}
+                                >
+                                  {pres.nombre} · {pres.stock}
+                                </span>
+                              ))}
+                            </div>
                           </td>
                           <td className="p-4 font-bold">{prod.stock} un.</td>
                           <td className="p-4 text-center">
@@ -921,44 +958,68 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-neutral-800 uppercase mb-1">Precio (COP)</label>
-                  <input
-                    type="number"
-                    required
-                    value={productForm.price}
-                    onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
-                    placeholder="180000"
-                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-sm text-neutral-900"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-neutral-800 uppercase mb-1">Stock Disponible</label>
-                  <input
-                    type="number"
-                    required
-                    value={productForm.stock}
-                    onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
-                    placeholder="15"
-                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-sm text-neutral-900"
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="block font-bold text-neutral-800 uppercase mb-1">
-                  Presentaciones Disponibles (ml, g, Único — separadas por comas)
-                </label>
+                <label className="block font-bold text-neutral-800 uppercase mb-1">Precio (COP)</label>
                 <input
-                  type="text"
+                  type="number"
                   required
-                  value={productForm.presentations}
-                  onChange={(e) => setProductForm({ ...productForm, presentations: e.target.value })}
-                  placeholder="30ml, 50ml, 100ml"
+                  min="0"
+                  value={productForm.price}
+                  onChange={(e) => setProductForm({ ...productForm, price: e.target.value })}
+                  placeholder="120000"
                   className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-sm text-neutral-900"
                 />
+              </div>
+
+              {/* Cada presentación lleva su propio inventario: un 50ml y un 100ml
+                  no se venden al mismo ritmo ni se agotan juntos. */}
+              <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-3.5 space-y-2">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="block font-bold text-neutral-900 uppercase">Presentaciones y stock</span>
+                    <span className="text-[11px] text-neutral-500">Ej. 50ml, 100ml, 200g, Único</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={agregarPresentacion}
+                    className="bg-neutral-900 hover:bg-black text-white text-[11px] font-bold px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    + Agregar
+                  </button>
+                </div>
+
+                {productForm.presentations.map((pres, i) => (
+                  <div key={i} className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      required
+                      maxLength={40}
+                      value={pres.nombre}
+                      onChange={(e) => cambiarPresentacion(i, 'nombre', e.target.value)}
+                      placeholder="50ml"
+                      className="flex-1 bg-white border border-neutral-300 rounded-lg p-2.5 outline-none focus:border-black font-semibold text-neutral-900"
+                    />
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={pres.stock}
+                      onChange={(e) => cambiarPresentacion(i, 'stock', e.target.value)}
+                      placeholder="0"
+                      title="Unidades en inventario"
+                      className="w-24 bg-white border border-neutral-300 rounded-lg p-2.5 outline-none focus:border-black font-semibold text-neutral-900"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => quitarPresentacion(i)}
+                      disabled={productForm.presentations.length === 1}
+                      title="Quitar presentación"
+                      className="text-red-500 hover:text-red-700 font-bold px-2 disabled:text-neutral-300 disabled:cursor-not-allowed"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
 
               <div>
@@ -980,16 +1041,18 @@ export default function AdminDashboard() {
                   <input
                     type="file"
                     accept="image/*"
-                    onChange={(e) => handleImageUpload(e, 'image')}
-                    className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-neutral-900 file:text-white hover:file:bg-black cursor-pointer mb-2"
+                    disabled={subiendoImagen}
+                    onChange={handleImageUpload}
+                    className="w-full text-xs text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-neutral-900 file:text-white hover:file:bg-black cursor-pointer mb-2 disabled:opacity-50"
                   />
+                  {subiendoImagen && (
+                    <p className="text-[11px] text-neutral-500 mb-2">Subiendo imagen...</p>
+                  )}
                   <input
                     type="text"
-                    value={productForm.image.startsWith('data:') ? '' : productForm.image}
+                    value={productForm.image}
                     onChange={(e) => setProductForm({ ...productForm, image: e.target.value })}
-                    placeholder={
-                      productForm.image.startsWith('data:') ? 'Imagen cargada desde archivo' : '/logo-mark.png o https://...'
-                    }
+                    placeholder="/uploads/foto.webp o https://..."
                     className="w-full bg-white border border-neutral-300 rounded-xl p-2.5 outline-none focus:border-black text-xs font-semibold text-neutral-900"
                   />
                 </div>
@@ -1007,6 +1070,12 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {errorForm && (
+                <p className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold rounded-xl p-3">
+                  {errorForm}
+                </p>
+              )}
+
               <div className="pt-4 flex gap-3">
                 <button
                   type="button"
@@ -1017,9 +1086,10 @@ export default function AdminDashboard() {
                 </button>
                 <button
                   type="submit"
-                  className="w-1/2 bg-black hover:bg-neutral-800 text-white font-bold py-3 rounded-xl uppercase tracking-wider transition-all shadow-lg"
+                  disabled={guardando || subiendoImagen}
+                  className="w-1/2 bg-black hover:bg-neutral-800 text-white font-bold py-3 rounded-xl uppercase tracking-wider transition-all shadow-lg disabled:bg-neutral-300 disabled:cursor-not-allowed"
                 >
-                  {editingProduct ? 'Guardar Cambios' : 'Crear Producto'}
+                  {guardando ? 'Guardando...' : editingProduct ? 'Guardar Cambios' : 'Crear Producto'}
                 </button>
               </div>
             </form>
@@ -1115,12 +1185,12 @@ export default function AdminDashboard() {
                 <select
                   required
                   value={manualSaleForm.productId}
-                  onChange={(e) => setManualSaleForm({ ...manualSaleForm, productId: e.target.value })}
+                  onChange={(e) => setManualSaleForm({ ...manualSaleForm, productId: e.target.value, size: '' })}
                   className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
                 >
                   <option value="">-- Elige un producto --</option>
                   {products.map((p) => (
-                    <option key={p.id} value={p.id}>
+                    <option key={p.id} value={String(p.id)}>
                       {p.name} - {formatCOP(p.price)} (Stock: {p.stock})
                     </option>
                   ))}
@@ -1130,13 +1200,18 @@ export default function AdminDashboard() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block font-bold text-neutral-800 uppercase mb-1">Presentación</label>
-                  <input
-                    type="text"
+                  <select
                     value={manualSaleForm.size}
                     onChange={(e) => setManualSaleForm({ ...manualSaleForm, size: e.target.value })}
-                    placeholder="100ml"
                     className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
-                  />
+                  >
+                    <option value="">-- Elige --</option>
+                    {presentacionesDelProductoElegido.map((pres) => (
+                      <option key={pres.nombre} value={pres.nombre} disabled={pres.stock <= 0}>
+                        {pres.nombre} ({pres.stock} disp.)
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block font-bold text-neutral-800 uppercase mb-1">Cantidad</label>

@@ -3,98 +3,43 @@
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
-import { Product, STORAGE_KEYS, categoryLabel, normalizeProduct, readStorage } from '@/lib/menu';
-
-// Catálogo de ejemplo: se usa solo mientras no haya productos creados en el admin.
-const fallbackProducts: Product[] = [
-  {
-    id: 'DEMO-1',
-    name: 'Eau de Parfum Oceanpark Night',
-    category: 'PERFUMERIA',
-    subcategory: { name: 'Para Ella', href: '/perfumeria/mujer' },
-    price: 120000,
-    description: 'Fragancia floral amaderada de alta fijación.',
-    presentations: ['50ml', '100ml'],
-    image: '',
-    stock: 10,
-    status: 'Disponible',
-  },
-  {
-    id: 'DEMO-2',
-    name: 'Paleta de Sombras Nude Edition',
-    category: 'MAQUILLAJE',
-    subcategory: { name: 'Sombras & Paletas', href: '/maquillaje/sombras' },
-    price: 75000,
-    description: '12 tonos mate y satinados de alta pigmentación.',
-    presentations: ['Único'],
-    image: '',
-    stock: 8,
-    status: 'Disponible',
-  },
-  {
-    id: 'DEMO-3',
-    name: 'Mascarilla Capilar Reparación Intensa',
-    category: 'CABELLO',
-    subcategory: { name: 'Mascarillas Capilares', href: '/cabello/mascarillas' },
-    price: 62000,
-    description: 'Tratamiento con keratina para cabello procesado.',
-    presentations: ['300ml'],
-    image: '',
-    stock: 12,
-    status: 'Disponible',
-  },
-  {
-    id: 'DEMO-4',
-    name: 'Crema Hidratante Facial Ácido Hialurónico',
-    category: 'SKINCARE',
-    subcategory: { name: 'Cremas Hidratantes', href: '/skincare/cremas' },
-    price: 88000,
-    description: 'Hidratación profunda 24h para todo tipo de piel.',
-    presentations: ['50ml'],
-    image: '',
-    stock: 9,
-    status: 'Disponible',
-  },
-];
+import { categoryLabel } from '@/lib/menu';
+import { Product, fetchProducts, formatCOP } from '@/lib/products';
 
 function SearchResultsContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get('q') || '';
 
-  const [catalog, setCatalog] = useState<Product[]>(fallbackProducts);
+  const [results, setResults] = useState<Product[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Busca sobre los productos reales creados en el admin
+  // La búsqueda la resuelve MySQL (nombre, descripción, subcategoría y categoría)
   useEffect(() => {
-    const saved = readStorage(STORAGE_KEYS.products);
-    if (!saved) return;
-    try {
-      const parsed: Product[] = JSON.parse(saved);
-      const normalized = parsed.map(normalizeProduct);
-      if (normalized.length > 0) setCatalog(normalized);
-    } catch (e) {
-      console.error('Error leyendo el catálogo guardado:', e);
-    }
-  }, []);
+    let cancelado = false;
 
-  const term = query.toLowerCase().trim();
+    (async () => {
+      setCargando(true);
+      setError(null);
+      try {
+        const data = await fetchProducts({ q: query || undefined, limit: 60 });
+        if (!cancelado) setResults(data);
+      } catch (e) {
+        console.error('Error buscando productos:', e);
+        if (!cancelado) setError('No pudimos realizar la búsqueda. Intenta de nuevo.');
+      } finally {
+        if (!cancelado) setCargando(false);
+      }
+    })();
 
-  const results = catalog.filter((product) =>
-    [product.name, product.category, product.subcategory?.name, product.description]
-      .filter(Boolean)
-      .some((field) => (field as string).toLowerCase().includes(term))
-  );
-
-  const formatCOP = (amount: number) =>
-    new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      maximumFractionDigits: 0,
-    }).format(amount);
+    return () => {
+      cancelado = true;
+    };
+  }, [query]);
 
   return (
     <main className="max-w-7xl mx-auto px-6 py-10">
 
-      {/* Encabezado con los datos de búsqueda */}
       <div className="border-b border-neutral-200 pb-6 mb-8">
         <span className="text-[10px] font-bold tracking-widest text-neutral-400 uppercase">
           Búsqueda
@@ -108,17 +53,30 @@ function SearchResultsContent() {
           )}
         </h1>
         <p className="text-xs text-neutral-500 mt-1">
-          {results.length} producto(s) encontrado(s)
+          {cargando ? 'Buscando...' : `${results.length} producto(s) encontrado(s)`}
         </p>
       </div>
 
-      {/* Grilla de Resultados */}
-      {results.length > 0 ? (
+      {cargando ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white p-4 rounded-2xl border border-neutral-200 animate-pulse">
+              <div className="aspect-square bg-neutral-200 rounded-xl mb-4" />
+              <div className="h-3 bg-neutral-200 rounded w-3/4 mb-2" />
+              <div className="h-3 bg-neutral-200 rounded w-1/2" />
+            </div>
+          ))}
+        </div>
+      ) : error ? (
+        <div className="text-center py-16 bg-white rounded-2xl border border-red-200">
+          <p className="text-sm font-semibold text-neutral-800">{error}</p>
+        </div>
+      ) : results.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
           {results.map((item) => (
             <Link
               key={item.id}
-              href={item.subcategory?.href || '/'}
+              href={item.subcategory.href}
               className="bg-white p-4 rounded-2xl border border-neutral-200 shadow-sm group block"
             >
               <div className="aspect-square bg-neutral-100 rounded-xl mb-4 overflow-hidden flex items-center justify-center text-2xl group-hover:bg-neutral-200 transition-colors">
@@ -133,8 +91,7 @@ function SearchResultsContent() {
                 )}
               </div>
               <span className="text-[9px] font-bold tracking-wider text-neutral-400 uppercase">
-                {categoryLabel(item.category)}
-                {item.subcategory?.name ? ` · ${item.subcategory.name}` : ''}
+                {categoryLabel(item.category)} · {item.subcategory.name}
               </span>
               <h3 className="text-xs font-semibold text-neutral-900 mt-0.5">{item.name}</h3>
               <p className="text-xs font-bold text-neutral-800 pt-1">{formatCOP(item.price)}</p>

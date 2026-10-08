@@ -3,14 +3,8 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import SearchButton from './components/SearchButton';
-import {
-  Product,
-  STORAGE_KEYS,
-  categoryLabel,
-  menuData,
-  normalizeProduct,
-  readStorage,
-} from '@/lib/menu';
+import { STORAGE_KEYS, categoryLabel, menuData, readStorage } from '@/lib/menu';
+import { Product, fetchProducts, formatCOP } from '@/lib/products';
 
 interface CartItem {
   id: number | string;
@@ -57,65 +51,6 @@ const heroSlides = [
   },
 ];
 
-const newArrivalsPlaceholders = [
-  {
-    id: 1,
-    name: 'Eau de Parfum Oceanpark Night 100ml',
-    category: 'Perfumería',
-    price: 120000,
-    image: 'https://images.unsplash.com/photo-1592400374401-002fe1d25961?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 2,
-    name: 'Set Decants Travel Size 5x10ml',
-    category: 'Perfumería',
-    price: 85000,
-    image: 'https://images.unsplash.com/photo-1543422655-ac1c6ca993ed?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 3,
-    name: 'Paleta de Sombras Nude Edition',
-    category: 'Maquillaje',
-    price: 75000,
-    image: 'https://images.unsplash.com/photo-1583784561105-a674080f391e?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 4,
-    name: 'Labial Mate Larga Duración',
-    category: 'Maquillaje',
-    price: 38000,
-    image: 'https://images.unsplash.com/photo-1625093742435-6fa192b6fb10?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 5,
-    name: 'Mascarilla Capilar Reparación Intensa',
-    category: 'Cabello',
-    price: 62000,
-    image: 'https://images.unsplash.com/photo-1574015974293-817f0ebebb74?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 6,
-    name: 'Shampoo & Acondicionador Keratina',
-    category: 'Cabello',
-    price: 95000,
-    image: 'https://images.unsplash.com/photo-1544717304-a2db4a7b16ee?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 7,
-    name: 'Crema Hidratante Facial Ácido Hialurónico',
-    category: 'Skincare',
-    price: 88000,
-    image: 'https://images.unsplash.com/photo-1609097164673-7cfafb51b926?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-  {
-    id: 8,
-    name: 'Set de Brochas Profesional 12 Piezas',
-    category: 'Accesorios',
-    price: 70000,
-    image: 'https://images.unsplash.com/photo-1620464003286-a5b0d79f32c2?auto=format&fit=crop&fm=jpg&q=80&w=800',
-  },
-];
-
 const featuredCollections = [
   {
     name: 'Perfumería Para Ella',
@@ -159,8 +94,9 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState(0);
 
-  // PRODUCTOS REALES CREADOS DESDE EL ADMIN
-  const [productsList, setProductsList] = useState<any[]>(newArrivalsPlaceholders);
+  // PRODUCTOS REALES, LEIDOS DE MySQL VIA /api/products
+  const [productsList, setProductsList] = useState<Product[]>([]);
+  const [cargandoProductos, setCargandoProductos] = useState(true);
 
   // ESTADO DEL CARRITO Y MODALES
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -194,20 +130,19 @@ export default function Home() {
   const FREESHIPPING_THRESHOLD = 150000;
   const SHIPPING_COST = 12000;
 
-  // CARGAR PRODUCTOS DEL ADMIN
-  const loadProductsFromStorage = () => {
-    const savedProducts = readStorage(STORAGE_KEYS.products);
-    if (savedProducts) {
-      try {
-        const parsed: Product[] = JSON.parse(savedProducts);
-        // Migra productos de la etapa de ropa (tallas -> presentaciones, categorías viejas)
-        const normalized = parsed.map(normalizeProduct);
-        if (normalized.length > 0) {
-          setProductsList(normalized);
-        }
-      } catch (e) {
-        console.error('Error al cargar productos del admin:', e);
-      }
+  // CARGAR PRODUCTOS DESDE LA BASE DE DATOS
+  // Primero los marcados como nuevo lanzamiento; si no hay ninguno,
+  // mostramos los ultimos agregados para que la portada no quede vacia.
+  const cargarProductos = async () => {
+    setCargandoProductos(true);
+    try {
+      const lanzamientos = await fetchProducts({ lanzamientos: true, limit: 8 });
+      setProductsList(lanzamientos.length > 0 ? lanzamientos : await fetchProducts({ limit: 8 }));
+    } catch (e) {
+      console.error('Error al cargar productos:', e);
+      setProductsList([]);
+    } finally {
+      setCargandoProductos(false);
     }
   };
 
@@ -225,15 +160,11 @@ export default function Home() {
 
   useEffect(() => {
     loadCartFromStorage();
-    loadProductsFromStorage();
+    cargarProductos();
 
-    const handleStorageChange = () => {
-      loadCartFromStorage();
-      loadProductsFromStorage();
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    // El carrito sigue siendo del navegador, asi que lo refrescamos al cambiar
+    window.addEventListener('storage', loadCartFromStorage);
+    return () => window.removeEventListener('storage', loadCartFromStorage);
   }, []);
 
   useEffect(() => {
@@ -262,12 +193,18 @@ export default function Home() {
   const nextSlide = () => setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
   const prevSlide = () => setCurrentSlide((prev) => (prev === 0 ? heroSlides.length - 1 : prev - 1));
 
-  const addToCart = (product: any) => {
-    const existing = cart.find((item) => item.id === product.id);
+  const addToCart = (product: Product) => {
+    // Desde la portada se agrega la primera presentacion con stock
+    const presentacion =
+      product.presentations.find((p) => p.stock > 0)?.nombre ?? product.presentations[0]?.nombre;
+
+    const existing = cart.find((item) => item.id === product.id && item.size === presentacion);
     let updatedCart: CartItem[];
     if (existing) {
       updatedCart = cart.map((item) =>
-        item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+        item.id === product.id && item.size === presentacion
+          ? { ...item, quantity: item.quantity + 1 }
+          : item
       );
     } else {
       updatedCart = [
@@ -278,6 +215,7 @@ export default function Home() {
           category: product.category,
           price: Number(product.price),
           quantity: 1,
+          size: presentacion,
           image: product.image,
         },
       ];
@@ -361,10 +299,6 @@ export default function Home() {
         },
       ]);
     }, 800);
-  };
-
-  const formatCOP = (amount: number) => {
-    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(amount);
   };
 
   return (
@@ -507,8 +441,25 @@ export default function Home() {
             </p>
           </div>
 
+          {cargandoProductos ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="border border-neutral-100 p-3 rounded-xl animate-pulse">
+                  <div className="aspect-square bg-neutral-200 rounded-lg mb-3" />
+                  <div className="h-3 bg-neutral-200 rounded w-3/4 mb-2" />
+                  <div className="h-8 bg-neutral-200 rounded-lg mt-2" />
+                </div>
+              ))}
+            </div>
+          ) : productsList.length === 0 ? (
+            <div className="text-center py-12">
+              <span className="text-3xl block mb-2">🧴</span>
+              <p className="text-xs font-semibold text-neutral-700 uppercase tracking-wider">Todavía no hay productos publicados</p>
+              <p className="text-[11px] text-neutral-400 mt-1">Agrégalos desde el panel de administración.</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
-            {productsList.map((item: any) => (
+            {productsList.map((item) => (
               <div key={item.id} className="group border border-neutral-100 p-3 rounded-xl hover:shadow-md transition-all flex flex-col justify-between">
                 <div>
                   <div className="relative aspect-square bg-neutral-100 rounded-lg overflow-hidden mb-3 flex items-center justify-center">
@@ -525,7 +476,7 @@ export default function Home() {
                   <div className="flex justify-between items-start text-xs mb-2">
                     <div>
                       <h3 className="font-semibold text-neutral-900">{item.name}</h3>
-                      <p className="text-neutral-400 text-[10px]">{item.category}</p>
+                      <p className="text-neutral-400 text-[10px]">{categoryLabel(item.category)}</p>
                     </div>
                     <span className="font-bold text-neutral-900">{formatCOP(Number(item.price))}</span>
                   </div>
@@ -533,13 +484,15 @@ export default function Home() {
 
                 <button
                   onClick={() => addToCart(item)}
-                  className="w-full bg-black hover:bg-neutral-800 text-white text-[11px] font-bold py-2 rounded-lg transition-colors mt-2 uppercase tracking-wider"
+                  disabled={item.status === 'Agotado'}
+                  className="w-full bg-black hover:bg-neutral-800 text-white text-[11px] font-bold py-2 rounded-lg transition-colors mt-2 uppercase tracking-wider disabled:bg-neutral-300 disabled:cursor-not-allowed"
                 >
-                  + Agregar al Carrito
+                  {item.status === 'Agotado' ? 'Agotado' : '+ Agregar al Carrito'}
                 </button>
               </div>
             ))}
           </div>
+          )}
         </section>
 
         {/* BANNER SECCIÓN: ATENCIÓN PERSONALIZADA */}

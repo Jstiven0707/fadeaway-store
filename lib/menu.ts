@@ -13,17 +13,15 @@
 // ALMACENAMIENTO LOCAL
 // Las claves pasaron de "fadeaway_*" a "oceanpark_*" con el cambio de marca.
 // readStorage() migra lo que ya estuviera guardado con el nombre anterior,
-// así nadie pierde su catálogo, carrito ni pedidos.
+// así nadie pierde su carrito ni sus pedidos. Los productos viven en MySQL.
 // ---------------------------------------------------------------------------
 
 export const STORAGE_KEYS = {
-  products: 'oceanpark_products',
   cart: 'oceanpark_cart',
   orders: 'oceanpark_orders',
 } as const;
 
 const LEGACY_STORAGE_KEYS: Record<string, string> = {
-  [STORAGE_KEYS.products]: 'fadeaway_products',
   [STORAGE_KEYS.cart]: 'fadeaway_cart',
   [STORAGE_KEYS.orders]: 'fadeaway_orders',
 };
@@ -56,27 +54,6 @@ export interface SubcategoryOption {
 export interface CategoryGroup {
   title: string;
   subcategories: SubcategoryOption[];
-}
-
-export interface ProductSubcategory {
-  name: string;
-  href?: string;
-  image?: string;
-}
-
-export interface Product {
-  id: string;
-  name: string;
-  category: string; // PERFUMERIA, MAQUILLAJE, CABELLO, SKINCARE, ACCESORIOS
-  subcategory?: ProductSubcategory;
-  price: number;
-  description: string;
-  /** Presentaciones de venta: 50ml, 100ml, 200g, Único... (antes eran "tallas") */
-  presentations: string[];
-  image: string;
-  stock: number;
-  status: 'Disponible' | 'Agotado';
-  isNewRelease?: boolean; // Control manual para Nuevos Lanzamientos
 }
 
 export const menuData: Record<string, CategoryGroup[]> = {
@@ -265,58 +242,4 @@ export const findCategoryByHref = (href?: string): string | undefined => {
       group.subcategories.some((sub) => sub.href === href.toLowerCase())
     )
   );
-};
-
-/** Href antiguos que sí tienen equivalente directo en el menú nuevo. */
-const LEGACY_HREF_MAP: Record<string, string> = {
-  '/perfumeria/Supreme': '/perfumeria/best-sellers',
-  '/perfumeria/decants': '/perfumeria/viajeros',
-  '/perfumeria/florales': '/perfumeria/dulces-especiados',
-};
-
-/**
- * Normaliza un producto guardado en localStorage antes de usarlo.
- *
- * Migra datos de la etapa de ropa:
- *   - "sizes" (tallas S/M/L) pasa a "presentations" (ml/g).
- *   - Categorías que ya no existen (HOMBRE, MUJER, KIDS) caen a PERFUMERIA.
- *   - Subcategorías huérfanas se borran para que las vuelvas a elegir al editar.
- *   - "Nuevos Lanzamientos" como subcategoría pasa al checkbox isNewRelease.
- */
-export const normalizeProduct = (raw: Product & { sizes?: string[] }): Product => {
-  let next: Product = { ...raw };
-
-  // Tallas viejas -> presentaciones
-  if (!Array.isArray(next.presentations)) {
-    next.presentations = Array.isArray(raw.sizes) && raw.sizes.length ? raw.sizes : ['Único'];
-  }
-  delete (next as Product & { sizes?: string[] }).sizes;
-
-  // Href viejos con mayúsculas/espacios o renombrados
-  if (next.subcategory?.href) {
-    const lowered = next.subcategory.href.toLowerCase();
-    const fixed = LEGACY_HREF_MAP[next.subcategory.href] ?? LEGACY_HREF_MAP[lowered] ?? lowered;
-    next = { ...next, subcategory: { ...next.subcategory, href: fixed } };
-  }
-
-  // "Nuevos Lanzamientos" era una subcategoría; ahora es un checkbox
-  if (isLaunchHref(next.subcategory?.href)) {
-    next = { ...next, isNewRelease: true, subcategory: undefined };
-  }
-
-  // Subcategoría que ya no existe en el menú de belleza: se limpia
-  if (next.subcategory?.href && !VALID_HREFS.has(next.subcategory.href)) {
-    next = { ...next, subcategory: undefined };
-  }
-
-  // Categoría de la etapa de ropa: se reubica y se pide volver a clasificar
-  if (!next.category || !menuData[next.category]) {
-    next = { ...next, category: 'PERFUMERIA', subcategory: undefined };
-  }
-
-  if (typeof next.isNewRelease !== 'boolean') {
-    next = { ...next, isNewRelease: false };
-  }
-
-  return next;
 };
