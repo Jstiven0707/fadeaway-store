@@ -57,6 +57,7 @@ model Producto {
   subcategoria          Subcategoria    @relation(fields: [idSubcategoria], references: [id], onDelete: Cascade)
   variants              ProductVariant[]
   detalleOrdenes        DetalleOrden[]
+  resenas               Resena[]
 
   @@map("productos")
 }
@@ -91,25 +92,91 @@ model Usuario {
 
 model Orden {
   id             Int             @id @default(autoincrement())
+  /// Codigo visible para el cliente: OP-123456
+  numero         String          @unique @db.VarChar(20)
   idUsuario      Int?            @map("id_usuario")
-  total          Decimal         @db.Decimal(10, 2)
-  estado         EstadoOrden?    @default(Pendiente)
+
+  nombre         String          @db.VarChar(100)
+  apellido       String          @db.VarChar(100)
+  ciudad         String          @db.VarChar(100)
   direccionEnvio String          @map("direccion_envio") @db.Text
   telefono       String          @db.VarChar(30)
+  notas          String?         @db.Text
+
+  metodoPago     MetodoPago      @map("metodo_pago")
+  canal          CanalVenta      @default(Web)
+  estado         EstadoOrden     @default(PENDIENTE_PAGO)
+
+  subtotal       Decimal         @db.Decimal(10, 2)
+  costoEnvio     Decimal         @default(0) @map("costo_envio") @db.Decimal(10, 2)
+  total          Decimal         @db.Decimal(10, 2)
+
+  /// Token del enlace de reseña, se genera al marcar Entregado
+  tokenResena    String?         @unique @map("token_resena") @db.VarChar(40)
+
   estadoRegis    EstadoRegis     @default(ACTIVO) @map("estado_regis")
   fechaCrecion   DateTime        @db.Date @map("fecha_crecion")
   horaDeCrecion  DateTime        @db.Time @map("hora_de_crecion")
+  fechahoraModificacion DateTime @default(now()) @updatedAt @map("Fechahora_modificacion")
 
   usuario        Usuario?        @relation(fields: [idUsuario], references: [id], onDelete: SetNull)
   detalles       DetalleOrden[]
+  resenas        Resena[]
+  historial      HistorialEstado[]
 
+  @@index([estado])
   @@map("ordenes")
+}
+
+/// Cada cambio de estado queda registrado: sirve para saber quien movio que y cuando.
+model HistorialEstado {
+  id          Int         @id @default(autoincrement())
+  idOrden     Int         @map("id_orden")
+  estado      EstadoOrden
+  nota        String?     @db.VarChar(255)
+  fechaHora   DateTime    @default(now()) @map("fecha_hora")
+
+  orden       Orden       @relation(fields: [idOrden], references: [id], onDelete: Cascade)
+
+  @@index([idOrden])
+  @@map("historial_estados")
+}
+
+/// Reseña que deja el cliente despues de recibir el pedido.
+model Resena {
+  id            Int         @id @default(autoincrement())
+  idOrden       Int         @map("id_orden")
+  idProducto    Int?        @map("id_producto")
+  /// 1 a 5 estrellas
+  calificacion  Int
+  comentario    String?     @db.Text
+  nombreCliente String      @map("nombre_cliente") @db.VarChar(100)
+  /// Solo las publicadas se muestran en la tienda
+  publicada     Boolean     @default(true)
+  estadoRegis   EstadoRegis @default(ACTIVO) @map("estado_regis")
+  fechaCrecion  DateTime    @default(now()) @map("fecha_crecion")
+
+  orden         Orden       @relation(fields: [idOrden], references: [id], onDelete: Cascade)
+  producto      Producto?   @relation(fields: [idProducto], references: [id], onDelete: SetNull)
+
+  @@index([idProducto])
+  @@map("resenas")
+}
+
+/// Configuracion editable desde el admin: numeros de Nequi/Daviplata, QR, WhatsApp.
+model Ajuste {
+  clave String @id @db.VarChar(60)
+  valor String @db.Text
+
+  @@map("ajustes")
 }
 
 model DetalleOrden {
   id             Int         @id @default(autoincrement())
   idOrden        Int         @map("id_orden")
   idProducto     Int?        @map("id_producto")
+  /// Nombre al momento de la venta: el producto puede cambiar o retirarse despues
+  nombreProducto String      @map("nombre_producto") @db.VarChar(150)
   /// Presentación vendida (antes era "talla")
   presentacion   String      @db.VarChar(40)
   cantidad       Int
@@ -132,10 +199,31 @@ enum RolUsuario {
   cliente
 }
 
+/// Flujo del pedido en dos etapas.
+/// Validacion: PENDIENTE_PAGO -> CONFIRMADO
+/// Logistica:  PENDIENTE_ALISTAMIENTO -> EN_PREPARACION -> ALISTADO -> ENVIADO -> ENTREGADO
+/// CANCELADO cubre tambien las devoluciones.
 enum EstadoOrden {
-  Pendiente
-  Pagado
-  Enviado
-  Entregado
-  Cancelado
+  PENDIENTE_PAGO
+  CONFIRMADO
+  PENDIENTE_ALISTAMIENTO
+  EN_PREPARACION
+  ALISTADO
+  ENVIADO
+  ENTREGADO
+  CANCELADO
+}
+
+enum MetodoPago {
+  NEQUI
+  DAVIPLATA
+  CONTRAENTREGA
+}
+
+enum CanalVenta {
+  Web
+  WhatsApp
+  Facebook
+  Instagram
+  Directo
 }

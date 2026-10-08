@@ -3,12 +3,24 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   CATEGORIES_PRINCIPALES,
-  STORAGE_KEYS,
   categoryLabel,
   getDefaultPresentations,
   getSubcategoriesForCategory,
-  readStorage,
 } from '@/lib/menu';
+import {
+  AjustesPago,
+  ESTADOS,
+  EstadoOrden,
+  METODOS_PAGO,
+  MetodoPago,
+  ORDEN_ESTADOS,
+  Pedido,
+  cambiarEstadoPedido,
+  crearPedido,
+  fetchAjustes,
+  fetchPedidos,
+  guardarAjustes,
+} from '@/lib/pedidos';
 import {
   Presentacion,
   Product,
@@ -21,34 +33,6 @@ import {
 
 // --- INTERFACES DE PEDIDOS ---
 // El menú vive en lib/menu.ts; el tipo Product y el cliente de la API en lib/products.ts.
-interface OrderItem {
-  id: number | string;
-  name: string;
-  price: number;
-  quantity: number;
-  size?: string; // presentación vendida
-}
-
-interface Order {
-  id: string;
-  date: string;
-  channel?: 'Web' | 'WhatsApp' | 'Facebook' | 'Instagram' | 'Directo';
-  customer: {
-    nombre: string;
-    apellido: string;
-    ciudad: string;
-    direccion: string;
-    telefono: string;
-    notas?: string;
-  };
-  paymentMethod: string;
-  items: OrderItem[];
-  subtotal: number;
-  shippingFee: number;
-  total: number;
-  status: 'Pendiente' | 'Pagado' | 'Enviado' | 'Cancelado';
-}
-
 /** Presentaciones sugeridas al crear un producto, segun la categoria. */
 const presentacionesPorDefecto = (categoria: string): Presentacion[] =>
   getDefaultPresentations(categoria)
@@ -62,12 +46,19 @@ export default function AdminDashboard() {
   const [credentials, setCredentials] = useState({ username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics' | 'settings'>('orders');
 
   // 2. ESTADOS DE PEDIDOS Y PRODUCTOS
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string>('TODOS');
-  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [orders, setOrders] = useState<Pedido[]>([]);
+  const [filterStatus, setFilterStatus] = useState<EstadoOrden | 'TODOS'>('TODOS');
+  const [selectedOrder, setSelectedOrder] = useState<Pedido | null>(null);
+  const [cargandoPedidos, setCargandoPedidos] = useState(true);
+  const [errorPedidos, setErrorPedidos] = useState<string | null>(null);
+  const [moviendoEstado, setMoviendoEstado] = useState(false);
+
+  // Datos de pago configurables (Nequi, Daviplata, WhatsApp)
+  const [ajustes, setAjustes] = useState<AjustesPago | null>(null);
+  const [guardandoAjustes, setGuardandoAjustes] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -105,21 +96,27 @@ export default function AdminDashboard() {
     size: 'Único',
     quantity: '1',
     shippingFee: '0',
-    paymentMethod: 'Transferencia Nequi/Bancolombia',
+    paymentMethod: 'NEQUI' as MetodoPago,
   });
 
-  // CARGAR Y PERSISTIR DATOS EN LOCALSTORAGE
-  useEffect(() => {
-    const savedOrders = readStorage(STORAGE_KEYS.orders);
-    if (savedOrders) {
-      try {
-        setOrders(JSON.parse(savedOrders));
-      } catch (e) {
-        console.error(e);
-      }
+  const cargarPedidos = useCallback(async () => {
+    setCargandoPedidos(true);
+    setErrorPedidos(null);
+    try {
+      setOrders(await fetchPedidos());
+    } catch (e) {
+      console.error('Error cargando pedidos:', e);
+      setErrorPedidos('No se pudieron cargar los pedidos desde la base de datos.');
+    } finally {
+      setCargandoPedidos(false);
     }
-
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    cargarPedidos();
+    fetchAjustes().then(setAjustes).catch((e) => console.error('Error leyendo ajustes:', e));
+  }, [isAuthenticated, cargarPedidos]);
 
   // Los productos viven en MySQL: se piden a /api/products
   const cargarProductos = useCallback(async () => {
@@ -138,16 +135,6 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (isAuthenticated) cargarProductos();
   }, [isAuthenticated, cargarProductos]);
-
-  const saveOrders = (updated: Order[]) => {
-    setOrders(updated);
-    try {
-      localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify(updated));
-    } catch (e) {
-      console.error('No se pudieron guardar los pedidos:', e);
-      alert('No se pudieron guardar los pedidos: el almacenamiento del navegador está lleno.');
-    }
-  };
 
   // LOGIN DE ACCESO
   const handleLogin = (e: React.FormEvent) => {
@@ -323,10 +310,49 @@ export default function AdminDashboard() {
   };
 
   // CAMBIAR ESTADO DE UNA ORDEN
-  const handleStatusChange = (orderId: string, newStatus: Order['status']) => {
-    const updated = orders.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o));
-    saveOrders(updated);
-    setSelectedOrder((prev) => (prev && prev.id === orderId ? { ...prev, status: newStatus } : prev));
+  // El servidor valida la transicion; aqui solo ofrecemos las permitidas.
+  const handleStatusChange = async (orderId: number, newStatus: EstadoOrden) => {
+    if (moviendoEstado) return;
+    setMoviendoEstado(true);
+    try {
+      const actualizado = await cambiarEstadoPedido(orderId, newStatus);
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? actualizado : o)));
+      setSelectedOrder((prev) => (prev && prev.id === orderId ? actualizado : prev));
+    } catch (error) {
+      alert((error as Error).message);
+    } finally {
+      setMoviendoEstado(false);
+    }
+  };
+
+  const enlaceResena = (pedido: Pedido) =>
+    pedido.tokenResena ? `${window.location.origin}/resena/${pedido.tokenResena}` : '';
+
+  const handleGuardarAjustes = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ajustes || guardandoAjustes) return;
+    setGuardandoAjustes(true);
+    try {
+      setAjustes(await guardarAjustes(ajustes));
+      alert('Datos de pago actualizados.');
+    } catch (error) {
+      alert((error as Error).message);
+    } finally {
+      setGuardandoAjustes(false);
+    }
+  };
+
+  const handleSubirQr = async (e: React.ChangeEvent<HTMLInputElement>, campo: 'nequiQr' | 'daviplataQr') => {
+    const file = e.target.files?.[0];
+    if (!file || !ajustes) return;
+    try {
+      const url = await uploadProductImage(file);
+      setAjustes({ ...ajustes, [campo]: url });
+    } catch (error) {
+      alert((error as Error).message);
+    } finally {
+      e.target.value = '';
+    }
   };
 
   // REGISTRAR VENTA MANUAL POR CHAT (WHATSAPP / REDES)
@@ -353,57 +379,26 @@ export default function AdminDashboard() {
       return;
     }
 
-    const subtotal = targetProduct.price * qty;
-    const shipping = Number(manualSaleForm.shippingFee);
-    const total = subtotal + shipping;
-
-    const newOrder: Order = {
-      id: `ORD-M${Date.now().toString().slice(-5)}`,
-      date: new Date().toISOString(),
-      channel: manualSaleForm.channel,
-      customer: {
+    // Se crea como cualquier otro pedido: la API calcula el total y descuenta
+    // el inventario en la misma transaccion.
+    try {
+      await crearPedido({
         nombre: manualSaleForm.customerName || 'Cliente Chat',
         apellido: '',
         ciudad: manualSaleForm.customerCity || 'No especificada',
-        direccion: manualSaleForm.customerAddress || 'No especificada',
+        direccionEnvio: manualSaleForm.customerAddress || 'No especificada',
         telefono: manualSaleForm.customerPhone || 'N/A',
-      },
-      paymentMethod: manualSaleForm.paymentMethod,
-      items: [
-        {
-          id: targetProduct.id,
-          name: targetProduct.name,
-          price: targetProduct.price,
-          quantity: qty,
-          size: manualSaleForm.size,
-        },
-      ],
-      subtotal,
-      shippingFee: shipping,
-      total,
-      status: 'Pagado',
-    };
-
-    // Se descuenta el stock en la base de datos antes de registrar la venta
-    try {
-      await updateProduct(targetProduct.id, {
-        subcategoryHref: targetProduct.subcategory.href,
-        name: targetProduct.name,
-        description: targetProduct.description,
-        price: targetProduct.price,
-        image: targetProduct.image,
-        isNewRelease: targetProduct.isNewRelease,
-        presentations: targetProduct.presentations.map((pres) =>
-          pres.nombre === presentacion.nombre ? { ...pres, stock: pres.stock - qty } : pres
-        ),
+        metodoPago: manualSaleForm.paymentMethod,
+        canal: manualSaleForm.channel,
+        costoEnvio: Number(manualSaleForm.shippingFee) || 0,
+        items: [{ idProducto: targetProduct.id, presentacion: presentacion.nombre, cantidad: qty }],
       });
-      await cargarProductos();
+      await Promise.all([cargarProductos(), cargarPedidos()]);
     } catch (error) {
-      alert(`No se pudo descontar el stock: ${(error as Error).message}`);
+      alert((error as Error).message);
       return;
     }
 
-    saveOrders([newOrder, ...orders]);
     setIsManualSaleOpen(false);
 
     setManualSaleForm({
@@ -416,7 +411,7 @@ export default function AdminDashboard() {
       size: 'Único',
       quantity: '1',
       shippingFee: '0',
-      paymentMethod: 'Transferencia Nequi/Bancolombia',
+      paymentMethod: 'NEQUI' as MetodoPago,
     });
 
     alert('Venta registrada con éxito y stock actualizado.');
@@ -426,13 +421,17 @@ export default function AdminDashboard() {
   const presentacionesDelProductoElegido =
     products.find((p) => String(p.id) === manualSaleForm.productId)?.presentations ?? [];
 
-  const filteredOrders = orders.filter((order) => {
-    if (filterStatus === 'TODOS') return true;
-    return order.status.toUpperCase() === filterStatus.toUpperCase();
-  });
+  const filteredOrders = orders.filter(
+    (order) => filterStatus === 'TODOS' || order.estado === filterStatus
+  );
 
-  // --- ESTADÍSTICAS (solo cuentan órdenes Pagado o Enviado) ---
-  const paidOrders = orders.filter((o) => o.status === 'Pagado' || o.status === 'Enviado');
+  // --- ESTADÍSTICAS ---
+  // Cuenta todo lo que ya paso validacion y no se cancelo: a partir de
+  // CONFIRMADO el dinero esta asegurado (o pactado, si es contraentrega).
+  const CUENTAN: EstadoOrden[] = [
+    'CONFIRMADO', 'PENDIENTE_ALISTAMIENTO', 'EN_PREPARACION', 'ALISTADO', 'ENVIADO', 'ENTREGADO',
+  ];
+  const paidOrders = orders.filter((o) => CUENTAN.includes(o.estado));
 
   const totalRevenue = paidOrders.reduce((sum, o) => sum + o.total, 0);
 
@@ -443,7 +442,7 @@ export default function AdminDashboard() {
     >();
 
     paidOrders.forEach((o) => {
-      const d = new Date(o.date);
+      const d = new Date(o.fecha);
       if (isNaN(d.getTime())) return;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const existing = map.get(key) ?? {
@@ -455,7 +454,7 @@ export default function AdminDashboard() {
       };
       existing.totalSales += o.total;
       existing.ordersCount += 1;
-      existing.itemsCount += o.items.reduce((acc, it) => acc + it.quantity, 0);
+      existing.itemsCount += o.items.reduce((acc, it) => acc + it.cantidad, 0);
       map.set(key, existing);
     });
 
@@ -570,6 +569,14 @@ export default function AdminDashboard() {
           >
             📊 Ventas & Flujo
           </button>
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'settings' ? 'bg-white text-black shadow' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            ⚙️ Datos de Pago
+          </button>
         </div>
 
         <div className="flex items-center gap-3">
@@ -598,20 +605,24 @@ export default function AdminDashboard() {
                 <p className="text-xs text-neutral-500">Gestión de envíos, ventas Web y por Redes Sociales</p>
               </div>
 
-              <div className="flex gap-2 text-xs font-semibold overflow-x-auto w-full sm:w-auto">
-                {['TODOS', 'PENDIENTE', 'PAGADO', 'ENVIADO', 'CANCELADO'].map((status) => (
-                  <button
-                    key={status}
-                    onClick={() => setFilterStatus(status)}
-                    className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
-                      filterStatus === status
-                        ? 'bg-black text-white font-bold'
-                        : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
+              <div className="flex gap-2 text-xs font-semibold overflow-x-auto w-full sm:w-auto pb-1">
+                {(['TODOS', ...ORDEN_ESTADOS] as const).map((estado) => {
+                  const cuantos =
+                    estado === 'TODOS' ? orders.length : orders.filter((o) => o.estado === estado).length;
+                  return (
+                    <button
+                      key={estado}
+                      onClick={() => setFilterStatus(estado)}
+                      className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
+                        filterStatus === estado
+                          ? 'bg-black text-white font-bold'
+                          : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                      }`}
+                    >
+                      {estado === 'TODOS' ? 'TODOS' : ESTADOS[estado].label} ({cuantos})
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -634,49 +645,51 @@ export default function AdminDashboard() {
                     {filteredOrders.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="text-center py-8 text-neutral-400">
-                          No hay pedidos registrados.
+                          {cargandoPedidos
+                            ? 'Cargando pedidos...'
+                            : errorPedidos
+                              ? errorPedidos
+                              : 'No hay pedidos registrados.'}
                         </td>
                       </tr>
                     ) : (
                       filteredOrders.map((order) => (
                         <tr key={order.id} className="hover:bg-neutral-50 transition-colors">
-                          <td className="p-4 font-bold text-neutral-900">{order.id}</td>
+                          <td className="p-4 font-bold text-neutral-900">{order.numero}</td>
                           <td className="p-4">
                             <span
                               className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                order.channel === 'WhatsApp'
+                                order.canal === 'WhatsApp'
                                   ? 'bg-emerald-100 text-emerald-800'
-                                  : order.channel === 'Facebook'
+                                  : order.canal === 'Facebook'
                                   ? 'bg-blue-100 text-blue-800'
-                                  : order.channel === 'Instagram'
+                                  : order.canal === 'Instagram'
                                   ? 'bg-pink-100 text-pink-800'
                                   : 'bg-neutral-200 text-neutral-800'
                               }`}
                             >
-                              {order.channel || 'Web'}
+                              {order.canal}
                             </span>
                           </td>
                           <td className="p-4 text-neutral-500">
-                            {new Date(order.date).toLocaleDateString('es-CO')}
+                            {new Date(order.fecha).toLocaleDateString('es-CO')}
                           </td>
                           <td className="p-4 font-semibold">
-                            {order.customer.nombre} {order.customer.apellido}
+                            {order.nombre} {order.apellido}
+                            <span className="block text-[10px] text-neutral-400 font-medium">
+                              {METODOS_PAGO[order.metodoPago].label}
+                            </span>
                           </td>
-                          <td className="p-4 text-neutral-600">{order.customer.ciudad}</td>
+                          <td className="p-4 text-neutral-600">{order.ciudad}</td>
                           <td className="p-4 font-bold text-neutral-900">{formatCOP(order.total)}</td>
                           <td className="p-4">
                             <span
-                              className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
-                                order.status === 'Pagado'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : order.status === 'Pendiente'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : order.status === 'Enviado'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : 'bg-red-100 text-red-800'
-                              }`}
+                              className={`inline-block px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase ${ESTADOS[order.estado].color}`}
                             >
-                              {order.status}
+                              {ESTADOS[order.estado].label}
+                            </span>
+                            <span className="block text-[9px] text-neutral-400 font-bold uppercase tracking-wider mt-1">
+                              {ESTADOS[order.estado].etapa}
                             </span>
                           </td>
                           <td className="p-4 text-center">
@@ -832,7 +845,7 @@ export default function AdminDashboard() {
               <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
                 <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Órdenes Totales</p>
                 <p className="text-2xl font-black text-neutral-900 mt-1">
-                  {orders.filter((o) => o.status !== 'Cancelado').length}
+                  {orders.filter((o) => o.estado !== 'CANCELADO').length}
                 </p>
               </div>
               <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
@@ -870,6 +883,99 @@ export default function AdminDashboard() {
             </div>
           </div>
         )}
+        {/* TAB 4: DATOS DE PAGO */}
+        {activeTab === 'settings' && (
+          <div className="max-w-2xl">
+            <div className="mb-6">
+              <h2 className="text-lg font-bold text-neutral-900">Datos de Pago</h2>
+              <p className="text-xs text-neutral-500">
+                Esto es lo que ve el cliente al confirmar un pedido con pago anticipado.
+              </p>
+            </div>
+
+            {!ajustes ? (
+              <div className="bg-white rounded-xl border border-neutral-200 p-8 text-center text-xs text-neutral-400">
+                Cargando...
+              </div>
+            ) : (
+              <form onSubmit={handleGuardarAjustes} className="space-y-4 text-xs">
+                {(['NEQUI', 'DAVIPLATA'] as const).map((metodo) => {
+                  const campoNumero = metodo === 'NEQUI' ? 'nequiNumero' : 'daviplataNumero';
+                  const campoQr = metodo === 'NEQUI' ? 'nequiQr' : 'daviplataQr';
+                  return (
+                    <div key={metodo} className="bg-white rounded-xl border border-neutral-200 p-5 space-y-3">
+                      <h3 className="font-bold text-neutral-900 uppercase">
+                        {METODOS_PAGO[metodo].label}
+                      </h3>
+
+                      <div>
+                        <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                          Número de celular
+                        </label>
+                        <input
+                          type="tel"
+                          value={ajustes[campoNumero]}
+                          onChange={(e) => setAjustes({ ...ajustes, [campoNumero]: e.target.value })}
+                          placeholder="3001234567"
+                          className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 items-start">
+                        <div>
+                          <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                            Código QR
+                          </label>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleSubirQr(e, campoQr)}
+                            className="w-full text-[11px] text-neutral-500 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-bold file:bg-neutral-900 file:text-white hover:file:bg-black cursor-pointer"
+                          />
+                          <p className="text-[10px] text-neutral-400 mt-1.5 leading-relaxed">
+                            Sácalo desde la app de {METODOS_PAGO[metodo].label}, en la opción de recibir pagos.
+                          </p>
+                        </div>
+                        <div className="flex items-center justify-center border border-dashed border-neutral-300 rounded-xl p-2 bg-neutral-50 min-h-[110px]">
+                          {ajustes[campoQr] ? (
+                            <img src={ajustes[campoQr]} alt="QR" className="h-24 w-24 object-contain" />
+                          ) : (
+                            <span className="text-neutral-400 text-[11px]">Sin QR</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <div className="bg-white rounded-xl border border-neutral-200 p-5">
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                    WhatsApp de la tienda
+                  </label>
+                  <input
+                    type="tel"
+                    value={ajustes.whatsappNumero}
+                    onChange={(e) => setAjustes({ ...ajustes, whatsappNumero: e.target.value })}
+                    placeholder="573001234567"
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                  <p className="text-[10px] text-neutral-400 mt-1.5">
+                    Con indicativo del país y sin signos. Para Colombia: 57 + el número.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={guardandoAjustes}
+                  className="bg-black hover:bg-neutral-800 text-white font-bold py-3 px-8 rounded-xl uppercase tracking-wider transition-all disabled:bg-neutral-300"
+                >
+                  {guardandoAjustes ? 'Guardando...' : 'Guardar'}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
+
       </main>
 
       {/* MODAL DE CREACIÓN / EDICIÓN DE PRODUCTO */}
@@ -1237,12 +1343,19 @@ export default function AdminDashboard() {
 
               <div>
                 <label className="block font-bold text-neutral-800 uppercase mb-1">Método de Pago</label>
-                <input
-                  type="text"
+                <select
                   value={manualSaleForm.paymentMethod}
-                  onChange={(e) => setManualSaleForm({ ...manualSaleForm, paymentMethod: e.target.value })}
+                  onChange={(e) =>
+                    setManualSaleForm({ ...manualSaleForm, paymentMethod: e.target.value as MetodoPago })
+                  }
                   className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
-                />
+                >
+                  {(Object.keys(METODOS_PAGO) as MetodoPago[]).map((m) => (
+                    <option key={m} value={m}>
+                      {METODOS_PAGO[m].label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="pt-4 flex gap-3">
@@ -1271,9 +1384,9 @@ export default function AdminDashboard() {
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-neutral-200 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4 border-b border-neutral-100 pb-3">
               <div>
-                <h3 className="font-black text-neutral-900 text-base uppercase">Orden: {selectedOrder.id}</h3>
+                <h3 className="font-black text-neutral-900 text-base uppercase">Orden: {selectedOrder.numero}</h3>
                 <p className="text-[11px] text-neutral-500">
-                  {new Date(selectedOrder.date).toLocaleString('es-CO')}
+                  {new Date(selectedOrder.fecha).toLocaleString('es-CO')} · {selectedOrder.canal}
                 </p>
               </div>
               <button
@@ -1288,13 +1401,13 @@ export default function AdminDashboard() {
               <div className="bg-neutral-50 p-3.5 rounded-xl border border-neutral-200">
                 <p className="font-bold text-neutral-900 uppercase mb-1">Datos del Cliente</p>
                 <p className="font-semibold text-neutral-800">
-                  {selectedOrder.customer.nombre} {selectedOrder.customer.apellido}
+                  {selectedOrder.nombre} {selectedOrder.apellido}
                 </p>
-                <p className="text-neutral-600">Teléfono: {selectedOrder.customer.telefono}</p>
-                <p className="text-neutral-600">Ciudad: {selectedOrder.customer.ciudad}</p>
-                <p className="text-neutral-600">Dirección: {selectedOrder.customer.direccion}</p>
-                {selectedOrder.customer.notas && (
-                  <p className="text-neutral-600">Notas: {selectedOrder.customer.notas}</p>
+                <p className="text-neutral-600">Teléfono: {selectedOrder.telefono}</p>
+                <p className="text-neutral-600">Ciudad: {selectedOrder.ciudad}</p>
+                <p className="text-neutral-600">Dirección: {selectedOrder.direccionEnvio}</p>
+                {selectedOrder.notas && (
+                  <p className="text-neutral-600">Notas: {selectedOrder.notas}</p>
                 )}
               </div>
 
@@ -1307,12 +1420,14 @@ export default function AdminDashboard() {
                       className="flex justify-between items-center bg-neutral-50 p-2.5 rounded-lg border border-neutral-200"
                     >
                       <div>
-                        <p className="font-bold text-neutral-900">{it.name}</p>
+                        <p className="font-bold text-neutral-900">{it.nombreProducto}</p>
                         <p className="text-[11px] text-neutral-500">
-                          Presentación: {it.size || 'N/A'} | Cantidad: {it.quantity}
+                          Presentación: {it.presentacion} | Cantidad: {it.cantidad}
                         </p>
                       </div>
-                      <span className="font-bold text-neutral-900">{formatCOP(it.price * it.quantity)}</span>
+                      <span className="font-bold text-neutral-900">
+                        {formatCOP(it.precioUnitario * it.cantidad)}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1325,30 +1440,101 @@ export default function AdminDashboard() {
                 </div>
                 <div className="flex justify-between text-neutral-600">
                   <span>Envío:</span>
-                  <span>{formatCOP(selectedOrder.shippingFee)}</span>
+                  <span>{formatCOP(selectedOrder.costoEnvio)}</span>
                 </div>
                 <div className="flex justify-between font-black text-neutral-900 text-sm pt-2 border-t border-neutral-200">
-                  <span>Total Pagado:</span>
+                  <span>Total:</span>
                   <span>{formatCOP(selectedOrder.total)}</span>
                 </div>
                 <p className="text-[11px] text-neutral-500 text-left mt-2">
-                  Método de pago: <span className="font-bold text-neutral-800">{selectedOrder.paymentMethod}</span>
+                  Método de pago:{' '}
+                  <span className="font-bold text-neutral-800">
+                    {METODOS_PAGO[selectedOrder.metodoPago].label}
+                  </span>
                 </p>
               </div>
 
-              <div>
-                <label className="block font-bold text-neutral-800 uppercase mb-1">Cambiar Estado de la Orden</label>
-                <select
-                  value={selectedOrder.status}
-                  onChange={(e) => handleStatusChange(selectedOrder.id, e.target.value as Order['status'])}
-                  className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900 text-xs"
-                >
-                  <option value="Pendiente">PENDIENTE</option>
-                  <option value="Pagado">PAGADO</option>
-                  <option value="Enviado">ENVIADO</option>
-                  <option value="Cancelado">CANCELADO</option>
-                </select>
+              <div className="border-t border-neutral-200 pt-4">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="font-bold text-neutral-800 uppercase">Estado del pedido</label>
+                  <span
+                    className={`px-2.5 py-1 rounded-full border text-[10px] font-bold uppercase ${ESTADOS[selectedOrder.estado].color}`}
+                  >
+                    {ESTADOS[selectedOrder.estado].label}
+                  </span>
+                </div>
+
+                {ESTADOS[selectedOrder.estado].siguientes.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {ESTADOS[selectedOrder.estado].siguientes.map((siguiente) => (
+                      <button
+                        key={siguiente}
+                        onClick={() => handleStatusChange(selectedOrder.id, siguiente)}
+                        disabled={moviendoEstado}
+                        className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-colors disabled:opacity-50 ${
+                          siguiente === 'CANCELADO'
+                            ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                            : 'bg-neutral-900 text-white hover:bg-black'
+                        }`}
+                      >
+                        {siguiente === 'CANCELADO' ? 'Cancelar / Devolución' : `Pasar a ${ESTADOS[siguiente].label}`}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-neutral-500">Este pedido ya está cerrado.</p>
+                )}
+
+                {/* Al entregar se habilita el enlace de calificación */}
+                {selectedOrder.estado === 'ENTREGADO' && selectedOrder.tokenResena && (
+                  <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-3.5">
+                    <p className="font-bold text-amber-900 uppercase text-[11px]">Pide la reseña</p>
+                    <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                      Mándale este enlace al cliente para que califique lo que compró.
+                    </p>
+                    <div className="flex gap-2 mt-2.5">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(enlaceResena(selectedOrder));
+                          alert('Enlace copiado.');
+                        }}
+                        className="flex-1 bg-white border border-amber-300 text-amber-900 font-bold text-[11px] py-2 rounded-lg hover:bg-amber-100 transition-colors"
+                      >
+                        Copiar enlace
+                      </button>
+                      <button
+                        onClick={() => {
+                          const texto = encodeURIComponent(
+                            `¡Hola ${selectedOrder.nombre}! Gracias por tu compra en OCEANPARK. ¿Nos regalas tu opinión? ${enlaceResena(selectedOrder)}`
+                          );
+                          const tel = (selectedOrder.telefono || '').replace(/\D/g, '');
+                          window.open(`https://wa.me/57${tel}?text=${texto}`, '_blank');
+                        }}
+                        className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[11px] py-2 rounded-lg transition-colors"
+                      >
+                        Enviar por WhatsApp
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Historial: quien movio el pedido y cuando */}
+              {selectedOrder.historial.length > 0 && (
+                <div className="border-t border-neutral-200 pt-4">
+                  <p className="font-bold text-neutral-800 uppercase mb-2">Historial</p>
+                  <ol className="space-y-1.5">
+                    {selectedOrder.historial.map((h, i) => (
+                      <li key={i} className="flex justify-between items-center text-[11px]">
+                        <span className="font-semibold text-neutral-700">{ESTADOS[h.estado].label}</span>
+                        <span className="text-neutral-400">
+                          {new Date(h.fechaHora).toLocaleString('es-CO')}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
             </div>
 
             <div className="mt-6 pt-3 border-t border-neutral-100 text-right">

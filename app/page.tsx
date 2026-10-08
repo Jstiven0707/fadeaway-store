@@ -5,6 +5,14 @@ import Link from 'next/link';
 import SearchButton from './components/SearchButton';
 import { STORAGE_KEYS, categoryLabel, menuData, readStorage } from '@/lib/menu';
 import { Product, fetchProducts, formatCOP } from '@/lib/products';
+import {
+  AjustesPago,
+  METODOS_PAGO,
+  MetodoPago,
+  Pedido,
+  crearPedido,
+  fetchAjustes,
+} from '@/lib/pedidos';
 
 interface CartItem {
   id: number | string;
@@ -102,11 +110,16 @@ export default function Home() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-  const [showOrderSuccess, setShowOrderSuccess] = useState(false);
-  const [lastOrderNumber, setLastOrderNumber] = useState('');
+  // Pedido recién creado: dispara la pantalla de pago o de confirmación
+  const [pedidoCreado, setPedidoCreado] = useState<Pedido | null>(null);
+  const [enviandoPedido, setEnviandoPedido] = useState(false);
+  const [errorPedido, setErrorPedido] = useState<string | null>(null);
+
+  // Números y QR de pago, configurables desde el panel
+  const [ajustes, setAjustes] = useState<AjustesPago | null>(null);
 
   // DATOS DEL CLIENTE Y MÉTODO DE PAGO
-  const [paymentMethod, setPaymentMethod] = useState<'nequi' | 'daviplata' | 'contraentrega' | 'tarjeta'>('nequi');
+  const [paymentMethod, setPaymentMethod] = useState<MetodoPago>('NEQUI');
   const [customer, setCustomer] = useState({
     nombre: '',
     apellido: '',
@@ -126,7 +139,8 @@ export default function Home() {
   ]);
   const [inputMessage, setInputMessage] = useState('');
 
-  const whatsappNumber = '573000000000';
+  // Si aún no se ha configurado en el panel, queda el de reserva
+  const whatsappNumber = ajustes?.whatsappNumero || '573000000000';
   const FREESHIPPING_THRESHOLD = 150000;
   const SHIPPING_COST = 12000;
 
@@ -161,6 +175,9 @@ export default function Home() {
   useEffect(() => {
     loadCartFromStorage();
     cargarProductos();
+    fetchAjustes()
+      .then(setAjustes)
+      .catch((e) => console.error('No se pudieron leer los datos de pago:', e));
 
     // El carrito sigue siendo del navegador, asi que lo refrescamos al cambiar
     window.addEventListener('storage', loadCartFromStorage);
@@ -246,34 +263,44 @@ export default function Home() {
     setCustomer({ ...customer, [e.target.name]: e.target.value });
   };
 
-  const handleConfirmOrder = (e: React.FormEvent) => {
+  const handleConfirmOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (enviandoPedido) return;
+
     if (!customer.nombre || !customer.apellido || !customer.ciudad || !customer.direccion || !customer.telefono) {
-      alert('Por favor completa todos los campos requeridos.');
+      setErrorPedido('Por favor completa todos los campos requeridos.');
       return;
     }
 
-    const orderId = `OP-${Math.floor(100000 + Math.random() * 900000)}`;
-    setLastOrderNumber(orderId);
+    setEnviandoPedido(true);
+    setErrorPedido(null);
+    try {
+      // El servidor recalcula precios y descuenta inventario; aquí solo se
+      // mandan qué productos y cuántos.
+      const pedido = await crearPedido({
+        nombre: customer.nombre,
+        apellido: customer.apellido,
+        ciudad: customer.ciudad,
+        direccionEnvio: customer.direccion,
+        telefono: customer.telefono,
+        notas: customer.notas || undefined,
+        metodoPago: paymentMethod,
+        costoEnvio: shippingFee,
+        items: cart.map((item) => ({
+          idProducto: Number(item.id),
+          presentacion: item.size || 'Único',
+          cantidad: item.quantity,
+        })),
+      });
 
-    const newOrder = {
-      id: orderId,
-      date: new Date().toLocaleString('es-CO'),
-      customer: { ...customer },
-      paymentMethod,
-      items: [...cart],
-      subtotal,
-      shippingFee,
-      total,
-      status: 'Pendiente',
-    };
-
-    const existingOrders = JSON.parse(readStorage(STORAGE_KEYS.orders) || '[]');
-    localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify([newOrder, ...existingOrders]));
-
-    saveCart([]);
-    setIsCheckoutOpen(false);
-    setShowOrderSuccess(true);
+      saveCart([]);
+      setIsCheckoutOpen(false);
+      setPedidoCreado(pedido);
+    } catch (error) {
+      setErrorPedido((error as Error).message);
+    } finally {
+      setEnviandoPedido(false);
+    }
   };
 
   const handleOpenWhatsApp = (customText?: string) => {
@@ -792,32 +819,34 @@ export default function Home() {
               <div className="space-y-3 pt-2 border-t border-neutral-200">
                 <h4 className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">2. Método de Pago</h4>
                 
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: 'nequi', title: 'Nequi', desc: 'Transferencia Directa' },
-                    { id: 'daviplata', title: 'Daviplata', desc: 'Transferencia Directa' },
-                    { id: 'contraentrega', title: 'Pago Contraentrega', desc: 'Paga al Recibir' },
-                    { id: 'tarjeta', title: 'Tarjeta Crédito/Débito', desc: 'PSE / Tarjetas' },
-                  ].map((m) => (
+                <div className="grid grid-cols-3 gap-2">
+                  {(Object.keys(METODOS_PAGO) as MetodoPago[]).map((id) => (
                     <label
-                      key={m.id}
+                      key={id}
                       className={`border p-3 rounded-xl cursor-pointer transition-all flex flex-col ${
-                        paymentMethod === m.id ? 'border-black bg-neutral-50 ring-1 ring-black' : 'border-neutral-200 hover:border-neutral-300'
+                        paymentMethod === id ? 'border-black bg-neutral-50 ring-1 ring-black' : 'border-neutral-200 hover:border-neutral-300'
                       }`}
                     >
                       <input
                         type="radio"
                         name="payment"
-                        value={m.id}
-                        checked={paymentMethod === m.id}
-                        onChange={() => setPaymentMethod(m.id as any)}
+                        value={id}
+                        checked={paymentMethod === id}
+                        onChange={() => setPaymentMethod(id)}
                         className="sr-only"
                       />
-                      <span className="font-bold text-neutral-900">{m.title}</span>
-                      <span className="text-[10px] text-neutral-500">{m.desc}</span>
+                      <span className="font-bold text-neutral-900">{METODOS_PAGO[id].label}</span>
+                      <span className="text-[10px] text-neutral-500">{METODOS_PAGO[id].desc}</span>
                     </label>
                   ))}
                 </div>
+
+                {METODOS_PAGO[paymentMethod].anticipado && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
+                    Al confirmar te mostramos el número y el QR para transferir. Tu pedido
+                    se alista apenas verifiquemos el pago.
+                  </p>
+                )}
               </div>
 
               <div className="pt-3 border-t border-neutral-200 bg-neutral-50 p-3 rounded-xl space-y-1 text-neutral-700">
@@ -835,53 +864,117 @@ export default function Home() {
                 </div>
               </div>
 
+              {errorPedido && (
+                <p className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold rounded-xl p-3">
+                  {errorPedido}
+                </p>
+              )}
+
               <button
                 type="submit"
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase py-4 rounded-full shadow-lg transition-colors"
+                disabled={enviandoPedido}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase py-4 rounded-full shadow-lg transition-colors disabled:bg-neutral-300 disabled:cursor-not-allowed"
               >
-                Confirmar y Registrar Pedido
+                {enviandoPedido ? 'Registrando...' : 'Confirmar y Registrar Pedido'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL DE CONFIRMACIÓN DE PEDIDO */}
-      {showOrderSuccess && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" />
-          <div className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 text-center z-10">
-            <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold mb-3">
-              ✓
-            </div>
-            <h3 className="text-lg font-bold text-neutral-900">¡Pedido Registrado con Éxito!</h3>
-            <p className="text-xs text-neutral-500 mt-1">
-              Código de Orden: <span className="font-bold text-black">{lastOrderNumber}</span>
-            </p>
-            <p className="text-xs text-neutral-600 mt-3 leading-relaxed">
-              Hemos registrado tus datos. Haz clic en el botón de abajo para enviar el comprobante o confirmar tu pedido directamente por WhatsApp con un asesor.
-            </p>
+      {/* PEDIDO CREADO: instrucciones de pago o confirmación */}
+      {pedidoCreado && (() => {
+        const anticipado = METODOS_PAGO[pedidoCreado.metodoPago].anticipado;
+        const esNequi = pedidoCreado.metodoPago === 'NEQUI';
+        const numeroPago = esNequi ? ajustes?.nequiNumero : ajustes?.daviplataNumero;
+        const qrPago = esNequi ? ajustes?.nequiQr : ajustes?.daviplataQr;
+        const nombreMetodo = METODOS_PAGO[pedidoCreado.metodoPago].label;
 
-            <div className="mt-6 space-y-2">
-              <button
-                onClick={() => {
-                  handleOpenWhatsApp(`¡Hola OCEANPARK! Acabo de realizar el pedido N° ${lastOrderNumber}. Adjunto confirmación.`);
-                  setShowOrderSuccess(false);
-                }}
-                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase py-3 rounded-full shadow-md transition-colors flex items-center justify-center gap-2"
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" />
+            <div className="relative bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 text-center z-10 max-h-[90vh] overflow-y-auto">
+
+              <div
+                className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto text-xl font-bold mb-3 ${
+                  anticipado ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'
+                }`}
               >
-                💬 Confirmar Pedido por WhatsApp
-              </button>
-              <button
-                onClick={() => setShowOrderSuccess(false)}
-                className="w-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-semibold text-xs py-2.5 rounded-full transition-colors"
-              >
-                Volver a la Tienda
-              </button>
+                {anticipado ? '⏳' : '✓'}
+              </div>
+
+              <h3 className="text-lg font-bold text-neutral-900">
+                {anticipado ? 'Falta un paso: el pago' : '¡Pedido Confirmado!'}
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1">
+                Pedido N° <span className="font-bold text-black">{pedidoCreado.numero}</span>
+              </p>
+
+              {anticipado ? (
+                <>
+                  <p className="text-xs text-neutral-600 mt-3 leading-relaxed">
+                    Transfiere <span className="font-bold text-black">{formatCOP(pedidoCreado.total)}</span> por{' '}
+                    {nombreMetodo} y envíanos el comprobante. Apenas lo verifiquemos, alistamos tu pedido.
+                  </p>
+
+                  <div className="mt-4 bg-neutral-50 border border-neutral-200 rounded-xl p-4">
+                    {numeroPago ? (
+                      <>
+                        <span className="block text-[10px] font-bold uppercase tracking-widest text-neutral-400">
+                          {nombreMetodo}
+                        </span>
+                        <span className="block text-xl font-bold text-neutral-900 tracking-wide mt-1">
+                          {numeroPago}
+                        </span>
+                      </>
+                    ) : (
+                      <p className="text-[11px] text-amber-700">
+                        Aún no hay un número de {nombreMetodo} configurado. Escríbenos por WhatsApp
+                        y te damos los datos de pago.
+                      </p>
+                    )}
+
+                    {qrPago && (
+                      <img
+                        src={qrPago}
+                        alt={`Código QR de ${nombreMetodo}`}
+                        className="w-40 h-40 object-contain mx-auto mt-3 bg-white rounded-lg border border-neutral-200 p-1"
+                      />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-neutral-600 mt-3 leading-relaxed">
+                  Pagas <span className="font-bold text-black">{formatCOP(pedidoCreado.total)}</span> al
+                  recibir. Ya estamos alistando tu pedido y te escribimos para coordinar la entrega.
+                </p>
+              )}
+
+              <div className="mt-6 space-y-2">
+                <button
+                  onClick={() => {
+                    handleOpenWhatsApp(
+                      anticipado
+                        ? `¡Hola OCEANPARK! Acabo de pagar el pedido N° ${pedidoCreado.numero} por ${nombreMetodo}. Adjunto el comprobante.`
+                        : `¡Hola OCEANPARK! Acabo de hacer el pedido N° ${pedidoCreado.numero} con pago contraentrega.`
+                    );
+                    setPedidoCreado(null);
+                  }}
+                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase py-3 rounded-full shadow-md transition-colors flex items-center justify-center gap-2"
+                >
+                  💬 {anticipado ? 'Enviar comprobante por WhatsApp' : 'Confirmar por WhatsApp'}
+                </button>
+                <button
+                  onClick={() => setPedidoCreado(null)}
+                  className="w-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-semibold text-xs py-2.5 rounded-full transition-colors"
+                >
+                  Volver a la Tienda
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* CHAT FLOTANTE DE ASESORÍA WEB */}
       {isChatOpen && (

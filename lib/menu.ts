@@ -13,17 +13,15 @@
 // ALMACENAMIENTO LOCAL
 // Las claves pasaron de "fadeaway_*" a "oceanpark_*" con el cambio de marca.
 // readStorage() migra lo que ya estuviera guardado con el nombre anterior,
-// así nadie pierde su carrito ni sus pedidos. Los productos viven en MySQL.
+// así nadie pierde su carrito. Productos y pedidos viven en MySQL.
 // ---------------------------------------------------------------------------
 
 export const STORAGE_KEYS = {
   cart: 'oceanpark_cart',
-  orders: 'oceanpark_orders',
 } as const;
 
 const LEGACY_STORAGE_KEYS: Record<string, string> = {
   [STORAGE_KEYS.cart]: 'fadeaway_cart',
-  [STORAGE_KEYS.orders]: 'fadeaway_orders',
 };
 
 export const readStorage = (key: string): string | null => {
