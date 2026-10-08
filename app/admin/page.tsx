@@ -9,17 +9,23 @@ import {
 } from '@/lib/menu';
 import {
   AjustesPago,
+  BANDEJAS,
+  Bandeja,
   ESTADOS,
+  PERIODOS,
+  Pago,
+  Periodo,
   EstadoOrden,
   METODOS_PAGO,
   MetodoPago,
-  ORDEN_ESTADOS,
   Pedido,
   cambiarEstadoPedido,
   crearPedido,
   fetchAjustes,
+  fetchPagos,
   fetchPedidos,
   guardarAjustes,
+  rangoDe,
 } from '@/lib/pedidos';
 import {
   Presentacion,
@@ -52,9 +58,17 @@ export default function AdminDashboard() {
   const [orders, setOrders] = useState<Pedido[]>([]);
   const [filterStatus, setFilterStatus] = useState<EstadoOrden | 'TODOS'>('TODOS');
   const [selectedOrder, setSelectedOrder] = useState<Pedido | null>(null);
+  const [bandeja, setBandeja] = useState<Bandeja>('pagos');
+  const [refPago, setRefPago] = useState('');
   const [cargandoPedidos, setCargandoPedidos] = useState(true);
   const [errorPedidos, setErrorPedidos] = useState<string | null>(null);
   const [moviendoEstado, setMoviendoEstado] = useState(false);
+
+  // Ventas: pagos recibidos dentro de un rango de fechas
+  const [periodo, setPeriodo] = useState<Periodo>('mes');
+  const [rango, setRango] = useState(() => rangoDe('mes'));
+  const [pagos, setPagos] = useState<Pago[]>([]);
+  const [cargandoPagos, setCargandoPagos] = useState(false);
 
   // Datos de pago configurables (Nequi, Daviplata, WhatsApp)
   const [ajustes, setAjustes] = useState<AjustesPago | null>(null);
@@ -111,6 +125,25 @@ export default function AdminDashboard() {
       setCargandoPedidos(false);
     }
   }, []);
+
+  // Los pagos se recargan cada vez que cambia el rango de fechas
+  useEffect(() => {
+    if (!isAuthenticated || activeTab !== 'analytics') return;
+    let cancelado = false;
+    setCargandoPagos(true);
+    fetchPagos(rango.desde, rango.hasta)
+      .then((d) => !cancelado && setPagos(d))
+      .catch((e) => console.error('Error cargando pagos:', e))
+      .finally(() => !cancelado && setCargandoPagos(false));
+    return () => {
+      cancelado = true;
+    };
+  }, [isAuthenticated, activeTab, rango]);
+
+  const elegirPeriodo = (nuevo: Periodo) => {
+    setPeriodo(nuevo);
+    setRango(rangoDe(nuevo));
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -315,7 +348,8 @@ export default function AdminDashboard() {
     if (moviendoEstado) return;
     setMoviendoEstado(true);
     try {
-      const actualizado = await cambiarEstadoPedido(orderId, newStatus);
+      const actualizado = await cambiarEstadoPedido(orderId, newStatus, undefined, refPago || undefined);
+      setRefPago('');
       setOrders((prev) => prev.map((o) => (o.id === orderId ? actualizado : o)));
       setSelectedOrder((prev) => (prev && prev.id === orderId ? actualizado : prev));
     } catch (error) {
@@ -421,45 +455,13 @@ export default function AdminDashboard() {
   const presentacionesDelProductoElegido =
     products.find((p) => String(p.id) === manualSaleForm.productId)?.presentations ?? [];
 
-  const filteredOrders = orders.filter(
+  // Un pedido entregado o cancelado sale de las bandejas de trabajo:
+  // ya no hay nada que hacerle, solo queda como historial.
+  const pedidosDeBandeja = orders.filter((o) => BANDEJAS[bandeja].estados.includes(o.estado));
+  const filteredOrders = pedidosDeBandeja.filter(
     (order) => filterStatus === 'TODOS' || order.estado === filterStatus
   );
 
-  // --- ESTADÍSTICAS ---
-  // Cuenta todo lo que ya paso validacion y no se cancelo: a partir de
-  // CONFIRMADO el dinero esta asegurado (o pactado, si es contraentrega).
-  const CUENTAN: EstadoOrden[] = [
-    'CONFIRMADO', 'PENDIENTE_ALISTAMIENTO', 'EN_PREPARACION', 'ALISTADO', 'ENVIADO', 'ENTREGADO',
-  ];
-  const paidOrders = orders.filter((o) => CUENTAN.includes(o.estado));
-
-  const totalRevenue = paidOrders.reduce((sum, o) => sum + o.total, 0);
-
-  const monthlyStats = (() => {
-    const map = new Map<
-      string,
-      { key: string; label: string; totalSales: number; ordersCount: number; itemsCount: number }
-    >();
-
-    paidOrders.forEach((o) => {
-      const d = new Date(o.fecha);
-      if (isNaN(d.getTime())) return;
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const existing = map.get(key) ?? {
-        key,
-        label: d.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' }),
-        totalSales: 0,
-        ordersCount: 0,
-        itemsCount: 0,
-      };
-      existing.totalSales += o.total;
-      existing.ordersCount += 1;
-      existing.itemsCount += o.items.reduce((acc, it) => acc + it.cantidad, 0);
-      map.set(key, existing);
-    });
-
-    return Array.from(map.values()).sort((a, b) => b.key.localeCompare(a.key));
-  })();
 
   if (!isAuthenticated) {
     return (
@@ -605,21 +607,62 @@ export default function AdminDashboard() {
                 <p className="text-xs text-neutral-500">Gestión de envíos, ventas Web y por Redes Sociales</p>
               </div>
 
-              <div className="flex gap-2 text-xs font-semibold overflow-x-auto w-full sm:w-auto pb-1">
-                {(['TODOS', ...ORDEN_ESTADOS] as const).map((estado) => {
+              <div className="flex gap-2 text-xs font-semibold w-full sm:w-auto">
+                {(Object.keys(BANDEJAS) as Bandeja[]).map((b) => {
+                  const cuantos = orders.filter((o) => BANDEJAS[b].estados.includes(o.estado)).length;
+                  return (
+                    <button
+                      key={b}
+                      onClick={() => {
+                        setBandeja(b);
+                        setFilterStatus('TODOS');
+                      }}
+                      className={`px-4 py-2 rounded-xl transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                        bandeja === b
+                          ? 'bg-black text-white font-bold shadow'
+                          : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                      }`}
+                    >
+                      <span>{BANDEJAS[b].icono}</span>
+                      {BANDEJAS[b].label}
+                      <span
+                        className={`px-1.5 rounded-full text-[10px] ${
+                          bandeja === b ? 'bg-white/20' : 'bg-white'
+                        }`}
+                      >
+                        {cuantos}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-[11px] text-neutral-500 mb-2">
+                {bandeja === 'pagos'
+                  ? 'Aquí solo se valida el dinero. Cuando confirmes el pago, el pedido pasa a Logística.'
+                  : bandeja === 'logistica'
+                    ? 'Alistamiento y despacho. Al marcar Entregado el pedido sale de esta bandeja.'
+                    : 'Pedidos cerrados. Solo quedan como historial.'}
+              </p>
+              <div className="flex gap-2 text-xs font-semibold overflow-x-auto pb-1">
+                {(['TODOS', ...BANDEJAS[bandeja].estados] as const).map((estado) => {
                   const cuantos =
-                    estado === 'TODOS' ? orders.length : orders.filter((o) => o.estado === estado).length;
+                    estado === 'TODOS'
+                      ? pedidosDeBandeja.length
+                      : pedidosDeBandeja.filter((o) => o.estado === estado).length;
                   return (
                     <button
                       key={estado}
                       onClick={() => setFilterStatus(estado)}
                       className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
                         filterStatus === estado
-                          ? 'bg-black text-white font-bold'
+                          ? 'bg-neutral-900 text-white font-bold'
                           : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                       }`}
                     >
-                      {estado === 'TODOS' ? 'TODOS' : ESTADOS[estado].label} ({cuantos})
+                      {estado === 'TODOS' ? 'Todos' : ESTADOS[estado].label} ({cuantos})
                     </button>
                   );
                 })}
@@ -649,7 +692,7 @@ export default function AdminDashboard() {
                             ? 'Cargando pedidos...'
                             : errorPedidos
                               ? errorPedidos
-                              : 'No hay pedidos registrados.'}
+                              : `No hay pedidos en ${BANDEJAS[bandeja].label}.`}
                         </td>
                       </tr>
                     ) : (
@@ -835,51 +878,159 @@ export default function AdminDashboard() {
         {/* TAB 3: ANALYTICS */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
-                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
-                  Ventas Totales (Pagadas y Enviadas)
-                </p>
-                <p className="text-2xl font-black text-neutral-900 mt-1">{formatCOP(totalRevenue)}</p>
+
+            {/* Rango de fechas: atajos por periodo o fechas a mano */}
+            <div className="bg-white rounded-xl border border-neutral-200 shadow-sm p-5 space-y-4">
+              <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                {(Object.keys(PERIODOS) as Periodo[]).map((pr) => (
+                  <button
+                    key={pr}
+                    onClick={() => elegirPeriodo(pr)}
+                    className={`px-4 py-2 rounded-xl transition-colors ${
+                      periodo === pr
+                        ? 'bg-black text-white font-bold shadow'
+                        : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                    }`}
+                  >
+                    {PERIODOS[pr]}
+                  </button>
+                ))}
               </div>
-              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
-                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Órdenes Totales</p>
-                <p className="text-2xl font-black text-neutral-900 mt-1">
-                  {orders.filter((o) => o.estado !== 'CANCELADO').length}
-                </p>
-              </div>
-              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
-                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">
-                  Productos en Catálogo
-                </p>
-                <p className="text-2xl font-black text-neutral-900 mt-1">{products.length}</p>
+
+              <div className="flex flex-wrap items-end gap-3 text-xs border-t border-neutral-100 pt-4">
+                <div>
+                  <label className="block font-bold text-neutral-500 uppercase mb-1 text-[10px]">Desde</label>
+                  <input
+                    type="date"
+                    value={rango.desde}
+                    onChange={(e) => setRango({ ...rango, desde: e.target.value })}
+                    className="border border-neutral-300 rounded-lg p-2 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-neutral-500 uppercase mb-1 text-[10px]">Hasta</label>
+                  <input
+                    type="date"
+                    value={rango.hasta}
+                    onChange={(e) => setRango({ ...rango, hasta: e.target.value })}
+                    className="border border-neutral-300 rounded-lg p-2 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                </div>
+                <span className="text-[11px] text-neutral-400 pb-2">
+                  {cargandoPagos ? 'Consultando...' : `${pagos.length} pago(s) en el rango`}
+                </span>
               </div>
             </div>
 
+            {/* Resumen del rango */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
+                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Vendido</p>
+                <p className="text-2xl font-black text-neutral-900 mt-1">
+                  {formatCOP(pagos.reduce((a, pg) => a + pg.monto, 0))}
+                </p>
+              </div>
+              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
+                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Pagos recibidos</p>
+                <p className="text-2xl font-black text-neutral-900 mt-1">{pagos.length}</p>
+              </div>
+              <div className="bg-white p-5 rounded-xl border border-neutral-200 shadow-sm">
+                <p className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Ticket promedio</p>
+                <p className="text-2xl font-black text-neutral-900 mt-1">
+                  {formatCOP(pagos.length ? pagos.reduce((a, pg) => a + pg.monto, 0) / pagos.length : 0)}
+                </p>
+              </div>
+            </div>
+
+            {/* Cuánto entró por cada medio */}
             <div className="bg-white rounded-xl border border-neutral-200 shadow-sm p-6">
               <h3 className="text-sm font-bold text-neutral-900 uppercase tracking-wider mb-4">
-                Flujo de Ventas Mes a Mes
+                Por medio de pago
               </h3>
-              {monthlyStats.length === 0 ? (
-                <p className="text-xs text-neutral-400 text-center py-6">
-                  Aún no hay ventas pagadas para mostrar estadísticas.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  {monthlyStats.map((stat) => (
-                    <div key={stat.key} className="border-b border-neutral-100 pb-4 last:border-0">
-                      <div className="flex justify-between items-center text-xs mb-1">
-                        <span className="font-bold text-neutral-800 capitalize">{stat.label}</span>
-                        <span className="font-black text-neutral-900">{formatCOP(stat.totalSales)}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-[11px] text-neutral-500">
-                        <span>{stat.ordersCount} órdenes realizadas</span>
-                        <span>{stat.itemsCount} prendas vendidas</span>
-                      </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(Object.keys(METODOS_PAGO) as MetodoPago[]).map((m) => {
+                  const delMetodo = pagos.filter((pg) => pg.metodo === m);
+                  const suma = delMetodo.reduce((a, pg) => a + pg.monto, 0);
+                  return (
+                    <div key={m} className="border border-neutral-200 rounded-xl p-4">
+                      <p className="text-[11px] font-bold text-neutral-500 uppercase">
+                        {METODOS_PAGO[m].label}
+                      </p>
+                      <p className="text-lg font-black text-neutral-900 mt-0.5">{formatCOP(suma)}</p>
+                      <p className="text-[11px] text-neutral-400">{delMetodo.length} pago(s)</p>
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Registro de pagos */}
+            <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
+              <div className="p-5 border-b border-neutral-200">
+                <h3 className="text-sm font-bold text-neutral-900 uppercase tracking-wider">
+                  Registro de pagos
+                </h3>
+                <p className="text-[11px] text-neutral-500 mt-0.5">
+                  Cada pago queda registrado cuando el dinero entra: al confirmar una transferencia,
+                  o al entregar si es contraentrega.
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-neutral-100 text-neutral-500 font-bold uppercase tracking-wider border-b border-neutral-200">
+                      <th className="p-4">Fecha</th>
+                      <th className="p-4">N° Orden</th>
+                      <th className="p-4">Cliente</th>
+                      <th className="p-4">Medio</th>
+                      <th className="p-4">Referencia</th>
+                      <th className="p-4 text-right">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200 font-medium">
+                    {pagos.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-center py-8 text-neutral-400">
+                          {cargandoPagos
+                            ? 'Consultando pagos...'
+                            : 'No hay pagos registrados en este rango de fechas.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      pagos.map((pg) => (
+                        <tr key={pg.id} className="hover:bg-neutral-50 transition-colors">
+                          <td className="p-4 text-neutral-500">
+                            {new Date(pg.fechaHora).toLocaleString('es-CO')}
+                          </td>
+                          <td className="p-4 font-bold text-neutral-900">{pg.numeroOrden}</td>
+                          <td className="p-4">{pg.cliente}</td>
+                          <td className="p-4">
+                            <span className="bg-neutral-100 border border-neutral-200 px-2 py-0.5 rounded text-[10px] font-bold">
+                              {METODOS_PAGO[pg.metodo].label}
+                            </span>
+                          </td>
+                          <td className="p-4 text-neutral-500">{pg.referencia || '—'}</td>
+                          <td className="p-4 text-right font-bold text-neutral-900">
+                            {formatCOP(pg.monto)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  {pagos.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-neutral-50 border-t-2 border-neutral-200">
+                        <td colSpan={5} className="p-4 font-bold text-neutral-700 uppercase text-right">
+                          Total del rango
+                        </td>
+                        <td className="p-4 text-right font-black text-neutral-900">
+                          {formatCOP(pagos.reduce((a, pg) => a + pg.monto, 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -1463,6 +1614,24 @@ export default function AdminDashboard() {
                     {ESTADOS[selectedOrder.estado].label}
                   </span>
                 </div>
+
+                {/* Al confirmar una transferencia se puede anotar el número de la
+                    transacción, que queda guardado junto al pago. */}
+                {selectedOrder.estado === 'PENDIENTE_PAGO' &&
+                  selectedOrder.metodoPago !== 'CONTRAENTREGA' && (
+                    <div className="mb-3">
+                      <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                        Referencia del pago (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={refPago}
+                        onChange={(e) => setRefPago(e.target.value)}
+                        placeholder="N° de transacción o comprobante"
+                        className="w-full bg-white border border-neutral-300 rounded-xl p-2.5 outline-none focus:border-black font-semibold text-neutral-900"
+                      />
+                    </div>
+                  )}
 
                 {ESTADOS[selectedOrder.estado].siguientes.length > 0 ? (
                   <div className="flex flex-wrap gap-2">

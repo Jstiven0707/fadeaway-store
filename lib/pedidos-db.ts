@@ -294,14 +294,16 @@ const reponerStock = async (conn: PoolConnection, idOrden: number) => {
 export const cambiarEstado = async (
   id: number,
   nuevo: EstadoOrden,
-  nota?: string
+  nota?: string,
+  referenciaPago?: string
 ): Promise<Pedido | null> => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
     const [filas] = await conn.query<RowDataPacket[]>(
-      `SELECT estado, token_resena FROM ordenes WHERE id = ? AND estado_regis = 'ACTIVO' FOR UPDATE`,
+      `SELECT estado, token_resena, metodo_pago, total FROM ordenes
+        WHERE id = ? AND estado_regis = 'ACTIVO' FOR UPDATE`,
       [id]
     );
     if (filas.length === 0) {
@@ -329,6 +331,28 @@ export const cambiarEstado = async (
 
     if (nuevo === 'CANCELADO') await reponerStock(conn, id);
 
+    // El pago queda registrado en el momento en que el dinero entra:
+    //   - transferencia (Nequi/Daviplata): al confirmarla
+    //   - contraentrega: al entregar, que es cuando el cliente paga
+    const metodo = filas[0].metodo_pago as MetodoPago;
+    const esMomentoDelPago =
+      (nuevo === 'CONFIRMADO' && metodo !== 'CONTRAENTREGA') ||
+      (nuevo === 'ENTREGADO' && metodo === 'CONTRAENTREGA');
+
+    if (esMomentoDelPago) {
+      const [yaHay] = await conn.query<RowDataPacket[]>(
+        `SELECT id FROM pagos WHERE id_orden = ? AND estado_regis = 'ACTIVO'`,
+        [id]
+      );
+      if (yaHay.length === 0) {
+        await conn.query(
+          `INSERT INTO pagos (id_orden, metodo, monto, referencia, nota)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, metodo, filas[0].total, referenciaPago?.slice(0, 80) || null, nota?.slice(0, 255) ?? null]
+        );
+      }
+    }
+
     await conn.query(`INSERT INTO historial_estados (id_orden, estado, nota) VALUES (?, ?, ?)`, [
       id,
       nuevo,
@@ -343,6 +367,36 @@ export const cambiarEstado = async (
   } finally {
     conn.release();
   }
+};
+
+/**
+ * Pagos recibidos entre dos fechas (inclusive), para la vista de ventas.
+ * Trae de una vez el numero de pedido y el cliente para no consultar dos veces.
+ */
+export const listarPagos = async (desde: string, hasta: string) => {
+  const [filas] = await db.query<RowDataPacket[]>(
+    `SELECT p.id, p.id_orden, p.metodo, p.monto, p.referencia, p.nota, p.fecha_hora,
+            o.numero, o.nombre, o.apellido
+       FROM pagos p
+       INNER JOIN ordenes o ON o.id = p.id_orden
+      WHERE p.estado_regis = 'ACTIVO'
+        AND DATE(p.fecha_hora) BETWEEN ? AND ?
+      ORDER BY p.fecha_hora DESC
+      LIMIT 500`,
+    [desde, hasta]
+  );
+
+  return filas.map((r) => ({
+    id: Number(r.id),
+    idOrden: Number(r.id_orden),
+    numeroOrden: r.numero,
+    cliente: `${r.nombre} ${r.apellido}`.trim(),
+    metodo: r.metodo as MetodoPago,
+    monto: Number(r.monto),
+    referencia: r.referencia,
+    nota: r.nota,
+    fechaHora: new Date(r.fecha_hora).toISOString(),
+  }));
 };
 
 // --- AJUSTES DE PAGO ---

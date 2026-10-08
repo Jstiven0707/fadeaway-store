@@ -181,11 +181,17 @@ export const crearPedido = (input: PedidoInput) =>
 export const fetchPedidos = (estado?: EstadoOrden | 'TODOS') =>
   pedir<Pedido[]>(`/api/orders${estado && estado !== 'TODOS' ? `?estado=${estado}` : ''}`);
 
-export const cambiarEstadoPedido = (id: number, estado: EstadoOrden, nota?: string) =>
+export const cambiarEstadoPedido = (
+  id: number,
+  estado: EstadoOrden,
+  nota?: string,
+  /** Número de transacción, solo al confirmar una transferencia */
+  referenciaPago?: string
+) =>
   pedir<Pedido>(`/api/orders/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ estado, nota }),
+    body: JSON.stringify({ estado, nota, referenciaPago }),
   });
 
 export const fetchAjustes = () => pedir<AjustesPago>('/api/admin/ajustes');
@@ -196,3 +202,99 @@ export const guardarAjustes = (ajustes: AjustesPago) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(ajustes),
   });
+
+// ---------------------------------------------------------------------------
+// PAGOS Y PERIODOS DE VENTA
+// ---------------------------------------------------------------------------
+
+export interface Pago {
+  id: number;
+  idOrden: number;
+  numeroOrden: string;
+  cliente: string;
+  metodo: MetodoPago;
+  monto: number;
+  referencia: string | null;
+  nota: string | null;
+  fechaHora: string;
+}
+
+export type Periodo = 'dia' | 'semana' | 'mes' | 'trimestre' | 'semestre' | 'anio';
+
+export const PERIODOS: Record<Periodo, string> = {
+  dia: 'Hoy',
+  semana: 'Esta semana',
+  mes: 'Este mes',
+  trimestre: 'Trimestre',
+  semestre: 'Semestre',
+  anio: 'Año',
+};
+
+const aISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/**
+ * Rango de fechas de un periodo, tomando hoy como referencia.
+ * La semana arranca el lunes, como se cuenta en Colombia.
+ */
+export const rangoDe = (periodo: Periodo, ref = new Date()): { desde: string; hasta: string } => {
+  const a = ref.getFullYear();
+  const m = ref.getMonth();
+
+  switch (periodo) {
+    case 'dia':
+      return { desde: aISO(ref), hasta: aISO(ref) };
+    case 'semana': {
+      const diaSemana = (ref.getDay() + 6) % 7; // lunes = 0
+      const lunes = new Date(a, m, ref.getDate() - diaSemana);
+      const domingo = new Date(a, m, ref.getDate() - diaSemana + 6);
+      return { desde: aISO(lunes), hasta: aISO(domingo) };
+    }
+    case 'mes':
+      return { desde: aISO(new Date(a, m, 1)), hasta: aISO(new Date(a, m + 1, 0)) };
+    case 'trimestre': {
+      const inicio = Math.floor(m / 3) * 3;
+      return { desde: aISO(new Date(a, inicio, 1)), hasta: aISO(new Date(a, inicio + 3, 0)) };
+    }
+    case 'semestre': {
+      const inicio = m < 6 ? 0 : 6;
+      return { desde: aISO(new Date(a, inicio, 1)), hasta: aISO(new Date(a, inicio + 6, 0)) };
+    }
+    case 'anio':
+      return { desde: aISO(new Date(a, 0, 1)), hasta: aISO(new Date(a, 11, 31)) };
+  }
+};
+
+export const fetchPagos = (desde: string, hasta: string) =>
+  pedir<Pago[]>(`/api/payments?desde=${desde}&hasta=${hasta}`);
+
+// ---------------------------------------------------------------------------
+// BANDEJAS DEL ADMIN
+//
+// El pago y la logistica son dos trabajos distintos: validar que entro la
+// plata no tiene nada que ver con alistar y despachar. Por eso van en
+// bandejas separadas, y lo ya cerrado sale de ambas.
+// ---------------------------------------------------------------------------
+
+export type Bandeja = 'pagos' | 'logistica' | 'finalizados';
+
+export const BANDEJAS: Record<Bandeja, { label: string; icono: string; estados: EstadoOrden[] }> = {
+  pagos: {
+    label: 'Pagos',
+    icono: '💵',
+    estados: ['PENDIENTE_PAGO', 'CONFIRMADO'],
+  },
+  logistica: {
+    label: 'Logística',
+    icono: '📦',
+    estados: ['PENDIENTE_ALISTAMIENTO', 'EN_PREPARACION', 'ALISTADO', 'ENVIADO'],
+  },
+  finalizados: {
+    label: 'Finalizados',
+    icono: '✓',
+    estados: ['ENTREGADO', 'CANCELADO'],
+  },
+};
+
+export const bandejaDe = (estado: EstadoOrden): Bandeja =>
+  (Object.keys(BANDEJAS) as Bandeja[]).find((b) => BANDEJAS[b].estados.includes(estado)) ?? 'finalizados';

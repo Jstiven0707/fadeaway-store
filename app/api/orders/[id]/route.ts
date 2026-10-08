@@ -33,14 +33,14 @@ export async function PATCH(request: Request, ctx: Contexto) {
   if (!id) return NextResponse.json({ success: false, error: 'Id inválido' }, { status: 400 });
 
   try {
-    const body = (await request.json()) as { estado?: string; nota?: string };
+    const body = (await request.json()) as { estado?: string; nota?: string; referenciaPago?: string };
     const estado = body.estado as EstadoOrden;
 
     if (!estado || !ORDEN_ESTADOS.includes(estado)) {
       return NextResponse.json({ success: false, error: 'Estado inválido' }, { status: 400 });
     }
 
-    const pedido = await cambiarEstado(id, estado, body.nota);
+    const pedido = await cambiarEstado(id, estado, body.nota, body.referenciaPago);
     if (!pedido) {
       return NextResponse.json({ success: false, error: 'Pedido no encontrado' }, { status: 404 });
     }

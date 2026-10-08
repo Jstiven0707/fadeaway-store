@@ -123,6 +123,7 @@ model Orden {
   detalles       DetalleOrden[]
   resenas        Resena[]
   historial      HistorialEstado[]
+  pagos          Pago[]
 
   @@index([estado])
   @@map("ordenes")
@@ -140,6 +141,26 @@ model HistorialEstado {
 
   @@index([idOrden])
   @@map("historial_estados")
+}
+
+/// Pago recibido de un pedido. Se registra cuando el dinero entra:
+/// al confirmar una transferencia, o al entregar si es contraentrega.
+model Pago {
+  id          Int         @id @default(autoincrement())
+  idOrden     Int         @map("id_orden")
+  metodo      MetodoPago
+  monto       Decimal     @db.Decimal(10, 2)
+  /// Numero de transaccion o comprobante que reporta el cliente
+  referencia  String?     @db.VarChar(80)
+  nota        String?     @db.VarChar(255)
+  fechaHora   DateTime    @default(now()) @map("fecha_hora")
+  estadoRegis EstadoRegis @default(ACTIVO) @map("estado_regis")
+
+  orden       Orden       @relation(fields: [idOrden], references: [id], onDelete: Cascade)
+
+  @@index([fechaHora])
+  @@index([idOrden])
+  @@map("pagos")
 }
 
 /// Reseña que deja el cliente despues de recibir el pedido.
