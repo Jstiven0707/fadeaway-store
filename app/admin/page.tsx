@@ -228,6 +228,12 @@ export default function AdminDashboard() {
       setCredentials({ email: '', password: '', nombre: '' });
     } catch (error) {
       setLoginError((error as Error).message);
+      // El estado pudo cambiar desde que se abrió la pantalla: si ya hay
+      // usuarios, el formulario pasa solo de 'crear cuenta' a 'iniciar sesión'
+      // en vez de dejar al usuario atascado.
+      fetchSesion()
+        .then((actual) => setSesion((prev) => ({ ...actual, usuario: prev?.usuario ?? actual.usuario })))
+        .catch(() => {});
     } finally {
       setEntrando(false);
     }
