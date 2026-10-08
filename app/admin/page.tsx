@@ -435,7 +435,7 @@ export default function AdminDashboard() {
         <div className="relative z-10 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-8 max-w-md w-full border border-neutral-800">
           <div className="text-center mb-6">
             <div className="inline-block bg-black px-6 py-3 rounded-lg mb-3 shadow-xl">
-              <img src="/logo-header.png" alt="OCEANPARK" className="h-14 w-auto object-contain brightness-0 invert" />
+              <img src="/logo-wordmark.png" alt="OCEANPARK" className="h-14 w-auto object-contain brightness-0 invert" />
             </div>
             <h1 className="text-xl font-black text-neutral-900 tracking-tight uppercase">Acceso Restringido</h1>
             <p className="text-xs text-neutral-500 font-medium mt-1">Panel de Administración de Tienda</p>
@@ -498,7 +498,7 @@ export default function AdminDashboard() {
       {/* HEADER */}
       <header className="bg-black text-white px-6 py-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-md">
         <div className="flex items-center gap-4">
-          <img src="/logo-header.png" alt="OCEANPARK" className="h-11 sm:h-12 w-auto object-contain brightness-0 invert" />
+          <img src="/logo-wordmark.png" alt="OCEANPARK" className="h-11 sm:h-12 w-auto object-contain brightness-0 invert" />
           <span className="bg-neutral-800 text-neutral-300 text-[10px] uppercase font-bold px-2.5 py-1 rounded-full border border-neutral-700">
             Control General
           </span>

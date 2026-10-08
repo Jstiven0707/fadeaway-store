@@ -385,7 +385,7 @@ export default function Home() {
             title="Ir a la página de inicio"
           >
             <img
-              src="/logo-header.png"
+              src="/logo-wordmark.png"
               alt="OCEANPARK"
               className="h-10 sm:h-12 xl:h-14 w-auto object-contain transition-opacity group-hover:opacity-70"
             />
