@@ -3,16 +3,14 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import SearchButton from './components/SearchButton';
-
-interface SubCategory {
-  label: string;
-  href: string;
-}
-
-interface CategoryGroup {
-  title: string;
-  subcategories: SubCategory[];
-}
+import {
+  Product,
+  STORAGE_KEYS,
+  categoryLabel,
+  menuData,
+  normalizeProduct,
+  readStorage,
+} from '@/lib/menu';
 
 interface CartItem {
   id: number | string;
@@ -20,168 +18,149 @@ interface CartItem {
   category: string;
   price: number;
   quantity: number;
-  size?: string;
+  size?: string; // presentación elegida (ml / g / único)
+  image?: string;
 }
-
-const menuData: Record<string, CategoryGroup[]> = {
-  HOMBRE: [
-    {
-      title: 'Ropa',
-      subcategories: [
-        { label: 'Hoodies & Sweaters', href: '/hombre/hoodies' },
-        { label: 'Camisetas & Graphic Tees', href: '/hombre/camisetas' },
-        { label: 'Pantalones & Joggers', href: '/hombre/pantalones' },
-        { label: 'Shorts & Pantalonetas', href: '/hombre/shorts' },
-        { label: 'Sets / Conjuntos', href: '/hombre/conjuntos' },
-      ],
-    },
-    {
-      title: 'Destacados',
-      subcategories: [
-        { label: 'Nuevos Lanzamientos', href: '/hombre/lanzamientos' },
-        { label: 'Jordan Style Drops', href: '/hombre/jordan' },
-      ],
-    },
-  ],
-  MUJER: [
-    {
-      title: 'Ropa Dama',
-      subcategories: [
-        { label: 'Tops & Crops', href: '/mujer/tops' },
-        { label: 'Hoodies Oversized', href: '/mujer/hoodies' },
-        { label: 'Pantalones & Cargo', href: '/mujer/pantalones' },
-        { label: 'Sets & Athleisure', href: '/mujer/sets' },
-      ],
-    },
-    {
-      title: 'Destacados',
-      subcategories: [
-        { label: 'Colección FADEAWAY Dama', href: '/mujer/coleccion' },
-        { label: 'Ofertas / Sale', href: '/mujer/sale' },
-      ],
-    },
-  ],
-  KIDS: [
-    {
-      title: 'Niños & Niñas',
-      subcategories: [
-        { label: 'Camisetas & Tops', href: '/kids/camisetas' },
-        { label: 'Hoodies & Buzos', href: '/kids/hoodies' },
-        { label: 'Pantalones & Joggers', href: '/kids/pantalones' },
-      ],
-    },
-  ],
-  ACCESORIOS: [
-    {
-      title: 'Streetwear Essentials',
-      subcategories: [
-        { label: 'Gorras & Caps', href: '/accesorios/gorras' },
-        { label: 'Bolsos & Crossbody', href: '/accesorios/bolsos' },
-        { label: 'Cinturones & Medias', href: '/accesorios/cinturones' },
-        { label: 'Joyería & Cadenas', href: '/accesorios/joyeria' },
-      ],
-    },
-  ],
-  PERFUMERIA: [
-    {
-      title: 'Fragancias FADEAWAY',
-      subcategories: [
-        { label: 'Perfumes Hombre', href: '/perfumeria/hombre' },
-        { label: 'Perfumes Mujer', href: '/perfumeria/mujer' },
-        { label: 'Fragancias Unisex', href: '/perfumeria/unisex' },
-      ],
-    },
-  ],
-};
 
 const heroSlides = [
   {
     id: 1,
-    tag: 'FADEAWAY X STREETWEAR',
-    title: 'Tokyo & NY Culture',
-    description: 'Inspirado en la cultura urbana de Nueva York y Japón. Siluetas oversized y zapatillas icónicas.',
-    buttonText: 'EXPLORAR LANZAMIENTO',
-    img: 'https://images.unsplash.com/photo-1698867928110-2408e8e2f44a?auto=format&fit=crop&fm=jpg&q=80&w=1600',
+    tag: 'BIENVENIDO A OCEANPARK',
+    title: 'TU RITUAL DE BELLEZA',
+    description: 'Perfumería, maquillaje y cuidado personal en un solo lugar',
+    buttonText: 'EXPLORAR',
+    img: 'https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&fm=jpg&q=80&w=1600',
   },
   {
     id: 2,
-    tag: 'SPRING / SUMMER DROPS',
-    title: 'Streetwear Culture',
-    description: 'Diseños contemporáneos pensados para el uso diario con materiales de alta densidad.',
-    buttonText: 'VER COLECCIÓN',
-    img: 'https://images.unsplash.com/photo-1558452919-08ae4aea8e29?auto=format&fit=crop&fm=jpg&q=80&w=1600',
+    tag: 'PERFUMERÍA G5 PREMIUM',
+    title: 'LA ESENCIA NUNCA PASA DE MODA',
+    description: 'Fragancias de alta fijación inspiradas en las casas que amas',
+    buttonText: 'VER PERFUMES',
+    img: 'https://images.unsplash.com/photo-1543422655-ac1c6ca993ed?auto=format&fit=crop&fm=jpg&q=80&w=1600',
   },
   {
     id: 3,
-    tag: 'JORDAN HERITAGE SERIES',
-    title: 'Wing It Edition',
-    description: 'Tributo a la época dorada del baloncesto de los 90s y la estética retro vintage.',
+    tag: 'SKINCARE & TRATAMIENTOS',
+    title: 'TU PIEL, TU MEJOR BASE',
+    description: 'Mascarillas, serums y cremas para una rutina que sí se nota',
     buttonText: 'COMPRAR AHORA',
-    img: 'https://images.unsplash.com/photo-1600269452121-4f2416e55c28?auto=format&fit=crop&fm=jpg&q=80&w=1600',
+    img: 'https://images.unsplash.com/photo-1608068811588-3a67006b7489?auto=format&fit=crop&fm=jpg&q=80&w=1600',
   },
   {
     id: 4,
-    tag: 'SNEAKER CULTURE VIBES',
-    title: 'Urban Kicks & Style',
-    description: 'Encuentra las mejores siluetas y combinaciones para elevar tu outfit diario.',
+    tag: 'CUIDADO DEL CABELLO',
+    title: 'BRILLO QUE SE QUEDA',
+    description: 'Tratamientos, mascarillas y styling para todo tipo de cabello',
     buttonText: 'DESCUBRIR MÁS',
-    img: 'https://images.unsplash.com/photo-1552346154-21d32810aba3?auto=format&fit=crop&fm=jpg&q=80&w=1600',
+    img: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&fm=jpg&q=80&w=1600',
   },
 ];
 
 const newArrivalsPlaceholders = [
-  { id: 1, name: 'Hoodie Oversized Tokyo Drop', category: 'Hombre', price: 165000 },
-  { id: 2, name: 'Camiseta Graphic NY Vintage', category: 'Hombre', price: 85000 },
-  { id: 3, name: 'Jogger Cargo Street Utility', category: 'Hombre', price: 140000 },
-  { id: 4, name: 'Crop Top Fadeaway Dama', category: 'Mujer', price: 65000 },
-  { id: 5, name: 'Gorra Snapback Wing It Edition', category: 'Accesorios', price: 75000 },
-  { id: 6, name: 'Perfume Fadeaway Night 100ml', category: 'Perfumería', price: 120000 },
-  { id: 7, name: 'Crossbody Bag Military Black', category: 'Accesorios', price: 95000 },
-  { id: 8, name: 'Set Athleisure Dama Oversized', category: 'Mujer', price: 180000 },
+  {
+    id: 1,
+    name: 'Eau de Parfum Oceanpark Night 100ml',
+    category: 'Perfumería',
+    price: 120000,
+    image: 'https://images.unsplash.com/photo-1592400374401-002fe1d25961?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 2,
+    name: 'Set Decants Travel Size 5x10ml',
+    category: 'Perfumería',
+    price: 85000,
+    image: 'https://images.unsplash.com/photo-1543422655-ac1c6ca993ed?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 3,
+    name: 'Paleta de Sombras Nude Edition',
+    category: 'Maquillaje',
+    price: 75000,
+    image: 'https://images.unsplash.com/photo-1583784561105-a674080f391e?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 4,
+    name: 'Labial Mate Larga Duración',
+    category: 'Maquillaje',
+    price: 38000,
+    image: 'https://images.unsplash.com/photo-1625093742435-6fa192b6fb10?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 5,
+    name: 'Mascarilla Capilar Reparación Intensa',
+    category: 'Cabello',
+    price: 62000,
+    image: 'https://images.unsplash.com/photo-1574015974293-817f0ebebb74?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 6,
+    name: 'Shampoo & Acondicionador Keratina',
+    category: 'Cabello',
+    price: 95000,
+    image: 'https://images.unsplash.com/photo-1544717304-a2db4a7b16ee?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 7,
+    name: 'Crema Hidratante Facial Ácido Hialurónico',
+    category: 'Skincare',
+    price: 88000,
+    image: 'https://images.unsplash.com/photo-1609097164673-7cfafb51b926?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
+  {
+    id: 8,
+    name: 'Set de Brochas Profesional 12 Piezas',
+    category: 'Accesorios',
+    price: 70000,
+    image: 'https://images.unsplash.com/photo-1620464003286-a5b0d79f32c2?auto=format&fit=crop&fm=jpg&q=80&w=800',
+  },
 ];
 
 const featuredCollections = [
   {
-    name: 'Jordan & Sneaker Culture',
-    href: '/hombre/jordan',
-    image: '',
-    tag: 'Ver Lanzamientos',
+    name: 'Perfumería Para Ella',
+    href: '/perfumeria/mujer',
+    image: 'https://images.unsplash.com/photo-1592400374401-002fe1d25961?auto=format&fit=crop&fm=jpg&q=80&w=1200',
+    tag: 'OCEANPARK Scents',
   },
   {
-    name: 'Hoodies & Oversized',
-    href: '/hombre/hoodies',
-    image: '',
-    tag: 'Colección Urbana',
+    name: 'Maquillaje de Rostro',
+    href: '/maquillaje/bases',
+    image: 'https://images.unsplash.com/photo-1622336889416-8d790ad807d7?auto=format&fit=crop&fm=jpg&q=80&w=1200',
+    tag: 'Beauty Essentials',
   },
   {
-    name: 'Streetwear Accessories',
-    href: '/accesorios/bolsos',
-    image: '',
+    name: 'Cuidado del Cabello',
+    href: '/cabello/tratamientos',
+    image: 'https://images.unsplash.com/photo-1581182800629-7d90925ad072?auto=format&fit=crop&fm=jpg&q=80&w=1200',
+    tag: 'Hair Care',
+  },
+  {
+    name: 'Mascarillas & Cremas',
+    href: '/skincare/mascarillas',
+    image: 'https://images.unsplash.com/photo-1585945037805-5fd82c2e60b1?auto=format&fit=crop&fm=jpg&q=80&w=1200',
+    tag: 'Skincare',
+  },
+  {
+    name: 'Brochas & Herramientas',
+    href: '/accesorios/brochas',
+    image: 'https://images.unsplash.com/photo-1620464003286-a5b0d79f32c2?auto=format&fit=crop&fm=jpg&q=80&w=1200',
     tag: 'Essentials',
   },
   {
-    name: 'Caps & Beanies',
-    href: '/accesorios/gorras',
-    image: '',
-    tag: 'Headwear',
-  },
-  {
-    name: 'Colección Dama Athleisure',
-    href: '/mujer/sets',
-    image: '',
-    tag: 'Street Dama',
-  },
-  {
-    name: 'Fragancias & Perfumería',
-    href: '/perfumeria/hombre',
-    image: '',
-    tag: 'FADEAWAY Scents',
+    name: 'Sets de Regalo',
+    href: '/accesorios/sets',
+    image: 'https://images.unsplash.com/photo-1543422655-ac1c6ca993ed?auto=format&fit=crop&fm=jpg&q=80&w=1200',
+    tag: 'Para Regalar',
   },
 ];
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [currentSlide, setCurrentSlide] = useState(0);
+
+  // PRODUCTOS REALES CREADOS DESDE EL ADMIN
+  const [productsList, setProductsList] = useState<any[]>(newArrivalsPlaceholders);
 
   // ESTADO DEL CARRITO Y MODALES
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -206,7 +185,7 @@ export default function Home() {
   const [chatMessages, setChatMessages] = useState<Array<{ sender: 'bot' | 'user'; text: string }>>([
     {
       sender: 'bot',
-      text: '¡Hola! 👋 Bienvenido a FADEAWAY. ¿En qué te podemos asesorar hoy?',
+      text: '¡Hola! 👋 Bienvenido a OCEANPARK. ¿En qué te podemos asesorar hoy?',
     },
   ]);
   const [inputMessage, setInputMessage] = useState('');
@@ -215,21 +194,44 @@ export default function Home() {
   const FREESHIPPING_THRESHOLD = 150000;
   const SHIPPING_COST = 12000;
 
-  // FUNCIÓN PARA CARGAR EL CARRITO DESDE LOCALSTORAGE
+  // CARGAR PRODUCTOS DEL ADMIN
+  const loadProductsFromStorage = () => {
+    const savedProducts = readStorage(STORAGE_KEYS.products);
+    if (savedProducts) {
+      try {
+        const parsed: Product[] = JSON.parse(savedProducts);
+        // Migra productos de la etapa de ropa (tallas -> presentaciones, categorías viejas)
+        const normalized = parsed.map(normalizeProduct);
+        if (normalized.length > 0) {
+          setProductsList(normalized);
+        }
+      } catch (e) {
+        console.error('Error al cargar productos del admin:', e);
+      }
+    }
+  };
+
+  // CARGAR CARRITO
   const loadCartFromStorage = () => {
-    const savedCart = localStorage.getItem('fadeaway_cart');
+    const savedCart = readStorage(STORAGE_KEYS.cart);
     if (savedCart) {
       try {
         setCart(JSON.parse(savedCart));
       } catch (e) {
-        console.error("Error al cargar carrito:", e);
+        console.error('Error al cargar carrito:', e);
       }
     }
   };
 
   useEffect(() => {
     loadCartFromStorage();
-    const handleStorageChange = () => loadCartFromStorage();
+    loadProductsFromStorage();
+
+    const handleStorageChange = () => {
+      loadCartFromStorage();
+      loadProductsFromStorage();
+    };
+
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
@@ -242,7 +244,7 @@ export default function Home() {
 
   const saveCart = (updatedCart: CartItem[]) => {
     setCart(updatedCart);
-    localStorage.setItem('fadeaway_cart', JSON.stringify(updatedCart));
+    localStorage.setItem(STORAGE_KEYS.cart, JSON.stringify(updatedCart));
   };
 
   const subtotal = cart.reduce((acc, item) => acc + item.price * item.quantity, 0);
@@ -260,7 +262,7 @@ export default function Home() {
   const nextSlide = () => setCurrentSlide((prev) => (prev + 1) % heroSlides.length);
   const prevSlide = () => setCurrentSlide((prev) => (prev === 0 ? heroSlides.length - 1 : prev - 1));
 
-  const addToCart = (product: typeof newArrivalsPlaceholders[0]) => {
+  const addToCart = (product: any) => {
     const existing = cart.find((item) => item.id === product.id);
     let updatedCart: CartItem[];
     if (existing) {
@@ -268,7 +270,17 @@ export default function Home() {
         item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
       );
     } else {
-      updatedCart = [...cart, { ...product, quantity: 1 }];
+      updatedCart = [
+        ...cart,
+        {
+          id: product.id,
+          name: product.name,
+          category: product.category,
+          price: Number(product.price),
+          quantity: 1,
+          image: product.image,
+        },
+      ];
     }
     saveCart(updatedCart);
     setIsCartOpen(true);
@@ -303,7 +315,7 @@ export default function Home() {
       return;
     }
 
-    const orderId = `FW-${Math.floor(100000 + Math.random() * 900000)}`;
+    const orderId = `OP-${Math.floor(100000 + Math.random() * 900000)}`;
     setLastOrderNumber(orderId);
 
     const newOrder = {
@@ -318,8 +330,8 @@ export default function Home() {
       status: 'Pendiente',
     };
 
-    const existingOrders = JSON.parse(localStorage.getItem('fadeaway_orders') || '[]');
-    localStorage.setItem('fadeaway_orders', JSON.stringify([newOrder, ...existingOrders]));
+    const existingOrders = JSON.parse(readStorage(STORAGE_KEYS.orders) || '[]');
+    localStorage.setItem(STORAGE_KEYS.orders, JSON.stringify([newOrder, ...existingOrders]));
 
     saveCart([]);
     setIsCheckoutOpen(false);
@@ -329,7 +341,7 @@ export default function Home() {
   const handleOpenWhatsApp = (customText?: string) => {
     const text = customText
       ? encodeURIComponent(customText)
-      : encodeURIComponent('¡Hola FADEAWAY! Quisiera consultar sobre un producto o agendar un pedido.');
+      : encodeURIComponent('¡Hola OCEANPARK! Quisiera consultar sobre un producto o agendar un pedido.');
     window.open(`https://wa.me/${whatsappNumber}?text=${text}`, '_blank');
   };
 
@@ -360,29 +372,35 @@ export default function Home() {
       
       {/* Top Banner Bar */}
       <div className="bg-neutral-900 text-white text-[11px] font-medium tracking-wide text-center py-2 uppercase">
-        Envíos Gratis por compras superiores a $150.000 COP
+        Envíos Gratis por compras superiores a $150.000 COP/ Pagos contraentrega / Envios a nivel nacional
       </div>
 
       {/* HEADER */}
       <header className="sticky top-0 z-40 bg-white/90 border-b border-neutral-200/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-24 flex justify-between items-center gap-4">
           
-          <Link href="/" className="flex items-center">
-            <div className="bg-black px-3 py-1.5 rounded-md">
-              <img src="/logo.png" alt="FADEAWAY" className="h-6 w-auto object-contain mix-blend-screen" />
-            </div>
+          <Link 
+            href="/" 
+            className="flex items-center group transition-transform hover:scale-[1.02]"
+            title="Ir a la página de inicio"
+          >
+            <img
+              src="/logo-header.png"
+              alt="OCEANPARK"
+              className="h-10 sm:h-12 xl:h-14 w-auto object-contain transition-opacity group-hover:opacity-70"
+            />
           </Link>
 
-          <nav className="hidden md:flex gap-8 text-xs font-semibold tracking-wider text-neutral-700">
+          <nav className="hidden lg:flex gap-6 xl:gap-8 text-xs font-semibold tracking-wider text-neutral-700">
             {Object.keys(menuData).map((key) => (
               <div
                 key={key}
-                className="relative py-5"
+                className="relative py-6"
                 onMouseEnter={() => setActiveTab(key)}
                 onMouseLeave={() => setActiveTab(null)}
               >
                 <button className={`transition-colors uppercase tracking-widest ${activeTab === key ? 'text-black font-bold' : 'hover:text-black'}`}>
-                  {key}
+                  {categoryLabel(key)}
                 </button>
 
                 {activeTab === key && (
@@ -416,10 +434,10 @@ export default function Home() {
                 loadCartFromStorage();
                 setIsCartOpen(true);
               }}
-              className="bg-black text-white px-3.5 py-1.5 rounded-full font-semibold text-xs hover:bg-neutral-800 transition-colors flex items-center gap-2"
+              className="bg-black text-white px-4 py-2 rounded-full font-semibold text-xs hover:bg-neutral-800 transition-colors flex items-center gap-2 shadow-sm"
             >
               <span>Carrito</span>
-              <span className="bg-white text-black text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+              <span className="bg-white text-black text-[10px] px-2 py-0.5 rounded-full font-bold">
                 {totalItemsCount}
               </span>
             </button>
@@ -480,28 +498,36 @@ export default function Home() {
           </div>
         </section>
 
-        {/* NEW ARRIVALS GRID */}
+        {/* NEW ARRIVALS GRID (CONECTADO AL ADMIN) */}
         <section className="bg-white p-6 sm:p-10 rounded-2xl border border-neutral-200/80 shadow-sm">
           <div className="text-center max-w-xl mx-auto mb-8">
-            <h2 className="text-2xl font-bold text-neutral-900 tracking-tight">New Arrivals</h2>
+            <h2 className="text-2xl font-bold text-neutral-900 tracking-tight">Últimos Lanzamientos</h2>
             <p className="text-xs text-neutral-500 mt-1">
-              Agrega productos directamente o explora el menú de categorías superior.
+              Agrega al carrito tus productos directamente o explora el menú de categorías superior.
             </p>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
-            {newArrivalsPlaceholders.map((item) => (
+            {productsList.map((item: any) => (
               <div key={item.id} className="group border border-neutral-100 p-3 rounded-xl hover:shadow-md transition-all flex flex-col justify-between">
                 <div>
-                  <div className="relative aspect-square bg-neutral-200 rounded-lg overflow-hidden mb-3 flex items-center justify-center p-2">
-                    <span className="text-[11px] font-medium text-neutral-500 text-center">{item.name}</span>
+                  <div className="relative aspect-square bg-neutral-100 rounded-lg overflow-hidden mb-3 flex items-center justify-center">
+                    {item.image ? (
+                      <img 
+                        src={item.image} 
+                        alt={item.name} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" 
+                      />
+                    ) : (
+                      <span className="text-[11px] font-medium text-neutral-500 text-center px-2">{item.name}</span>
+                    )}
                   </div>
                   <div className="flex justify-between items-start text-xs mb-2">
                     <div>
                       <h3 className="font-semibold text-neutral-900">{item.name}</h3>
                       <p className="text-neutral-400 text-[10px]">{item.category}</p>
                     </div>
-                    <span className="font-bold text-neutral-900">{formatCOP(item.price)}</span>
+                    <span className="font-bold text-neutral-900">{formatCOP(Number(item.price))}</span>
                   </div>
                 </div>
 
@@ -523,15 +549,15 @@ export default function Home() {
               Asesoría Personalizada
             </span>
             <h2 className="text-2xl sm:text-3xl font-serif italic mt-3 mb-2">
-              ¿Tienes dudas con tu talla o deseas agendar un pedido?
+              ¿No sabes qué fragancia o tono elegir?
             </h2>
             <p className="text-xs text-neutral-300 font-light leading-relaxed">
-              Nuestros asesores de FADEAWAY están disponibles para ayudarte a elegir prendas, verificar disponibilidad en bodega y gestionar tu compra de forma rápida y directa.
+              Nuestras asesoras de OCEANPARK te ayudan a escoger tu perfume, tu tono de base o la rutina ideal para tu tipo de piel y cabello, verificar disponibilidad y gestionar tu compra de forma rápida y directa.
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
             <button
-              onClick={() => handleOpenWhatsApp('¡Hola! Quiero agendar un pedido y consultar disponibilidad de prendas.')}
+              onClick={() => handleOpenWhatsApp('¡Hola! Quiero asesoría para elegir un producto y agendar un pedido.')}
               className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase px-6 py-3.5 rounded-full shadow-lg transition-all flex items-center justify-center gap-2"
             >
               💬 Agendar por WhatsApp
@@ -550,14 +576,14 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-8 gap-4">
             <div>
               <span className="text-[10px] font-bold tracking-widest text-neutral-400 uppercase">
-                Explora por Estilo
+                Explora por Categoría
               </span>
               <h2 className="text-2xl font-bold text-neutral-900 tracking-tight mt-1">
                 Colecciones Destacadas
               </h2>
             </div>
             <p className="text-xs text-neutral-500 max-w-xs">
-              Haz clic en cualquier colección para ver las prendas y accesorios disponibles.
+              Haz clic en cualquier colección para ver los productos disponibles.
             </p>
           </div>
 
@@ -576,7 +602,7 @@ export default function Home() {
                   />
                 ) : (
                   <div className="w-full h-full bg-neutral-800 border-2 border-dashed border-neutral-600 flex flex-col justify-center items-center text-center p-4">
-                    <span className="text-2xl mb-1">🖼️</span>
+                    <span className="text-2xl mb-1">🖼</span>
                     <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest">Subir foto aquí</span>
                   </div>
                 )}
@@ -635,11 +661,16 @@ export default function Home() {
               ) : (
                 cart.map((item, index) => (
                   <div key={item.id ? `${item.id}-${index}` : index} className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100">
-                    <div className="flex-1 pr-3">
-                      <h4 className="text-xs font-bold text-neutral-800">
-                        {item.name} {item.size ? `(Talla: ${item.size})` : ''}
-                      </h4>
-                      <p className="text-[11px] text-neutral-500 font-semibold">{formatCOP(item.price)} c/u</p>
+                    <div className="flex items-center gap-3 flex-1 pr-3">
+                      {item.image && (
+                        <img src={item.image} alt={item.name} className="w-12 h-12 object-cover rounded-lg bg-neutral-200" />
+                      )}
+                      <div>
+                        <h4 className="text-xs font-bold text-neutral-800">
+                          {item.name} {item.size ? `(${item.size})` : ''}
+                        </h4>
+                        <p className="text-[11px] text-neutral-500 font-semibold">{formatCOP(item.price)} c/u</p>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-3">
@@ -881,7 +912,7 @@ export default function Home() {
             <div className="mt-6 space-y-2">
               <button
                 onClick={() => {
-                  handleOpenWhatsApp(`¡Hola FADEAWAY! Acabo de realizar el pedido N° ${lastOrderNumber}. Adjunto confirmación.`);
+                  handleOpenWhatsApp(`¡Hola OCEANPARK! Acabo de realizar el pedido N° ${lastOrderNumber}. Adjunto confirmación.`);
                   setShowOrderSuccess(false);
                 }}
                 className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs uppercase py-3 rounded-full shadow-md transition-colors flex items-center justify-center gap-2"
@@ -906,7 +937,7 @@ export default function Home() {
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse"></span>
               <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider">Asesor FADEAWAY</h4>
+                <h4 className="text-xs font-bold uppercase tracking-wider">Asesor OCEANPARK</h4>
                 <p className="text-[10px] text-neutral-400">En línea</p>
               </div>
             </div>
@@ -965,7 +996,7 @@ export default function Home() {
       </div>
 
       {/* BARRA INFERIOR MÓVIL (QUICK NAVIGATION) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-neutral-200 z-30 px-6 py-2.5 flex justify-between items-center text-xs font-semibold text-neutral-600">
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-neutral-200 z-30 px-6 py-2.5 flex justify-between items-center text-xs font-semibold text-neutral-600">
         <Link href="/" className="flex flex-col items-center gap-0.5 text-black">
           <span className="text-base">🏠</span>
           <span className="text-[10px]">Inicio</span>
@@ -989,19 +1020,19 @@ export default function Home() {
       <footer className="bg-black text-white mt-20 pt-12 pb-16 text-xs">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-8">
           <div>
-            <h3 className="font-bold uppercase tracking-widest text-sm mb-3">FADEAWAY</h3>
+            <h3 className="font-bold uppercase tracking-widest text-sm mb-3">OCEANPARK</h3>
             <p className="text-neutral-400 leading-relaxed text-[11px]">
-              Marca de ropa urbana inspirada en la cultura del baloncesto, el streetwear japonés y la moda de Nueva York.
+              Perfumería calidad G5 Premium y 1.1, maquillaje, cuidado facial y capilar, junto a productos originales seleccionados. Esencias de alta fijación y fórmulas que sí rinden, con el acabado de tus marcas favoritas a una fracción de su costo comercial.
             </p>
           </div>
           <div>
             <h4 className="font-bold uppercase tracking-wider text-[11px] text-neutral-400 mb-3">Categorías</h4>
             <ul className="space-y-2 text-neutral-300">
-              <li><Link href="/hombre/hoodies" className="hover:text-white">Hombre</Link></li>
-              <li><Link href="/mujer/tops" className="hover:text-white">Mujer</Link></li>
-              <li><Link href="/kids/camisetas" className="hover:text-white">Kids</Link></li>
-              <li><Link href="/accesorios/gorras" className="hover:text-white">Accesorios</Link></li>
-              <li><Link href="/perfumeria/hombre" className="hover:text-white">Perfumería</Link></li>
+              <li><Link href="/perfumeria/mujer" className="hover:text-white">Perfumería</Link></li>
+              <li><Link href="/maquillaje/bases" className="hover:text-white">Maquillaje</Link></li>
+              <li><Link href="/cabello/shampoo" className="hover:text-white">Cabello</Link></li>
+              <li><Link href="/skincare/cremas" className="hover:text-white">Skincare</Link></li>
+              <li><Link href="/accesorios/brochas" className="hover:text-white">Accesorios</Link></li>
             </ul>
           </div>
           <div>
@@ -1009,12 +1040,12 @@ export default function Home() {
             <ul className="space-y-2 text-neutral-300">
               <li><button onClick={() => handleOpenWhatsApp()} className="hover:text-white">Preguntas Frecuentes</button></li>
               <li><button onClick={() => handleOpenWhatsApp()} className="hover:text-white">Envíos & Devoluciones</button></li>
-              <li><button onClick={() => handleOpenWhatsApp()} className="hover:text-white">Guía de Tallas</button></li>
+              <li><button onClick={() => handleOpenWhatsApp()} className="hover:text-white">Guía de Presentaciones</button></li>
             </ul>
           </div>
           <div>
             <h4 className="font-bold uppercase tracking-wider text-[11px] text-neutral-400 mb-3">Síguenos</h4>
-            <p className="text-neutral-400 mb-3 text-[11px]">Únete a la comunidad FADEAWAY en redes sociales.</p>
+            <p className="text-neutral-400 mb-3 text-[11px]">Únete a la comunidad OCEANPARK en redes sociales.</p>
             <div className="flex gap-3">
               <span className="w-8 h-8 rounded-full bg-neutral-800 flex items-center justify-center cursor-pointer hover:bg-neutral-700">IG</span>
               <span className="w-8 h-8 rounded-full bg-neutral-800 flex items-center justify-center cursor-pointer hover:bg-neutral-700">TK</span>
@@ -1023,7 +1054,7 @@ export default function Home() {
           </div>
         </div>
         <div className="max-w-7xl mx-auto px-6 mt-12 pt-6 border-t border-neutral-800 text-center text-neutral-500 text-[10px]">
-          © {new Date().getFullYear()} FADEAWAY Streetwear. Todos los derechos reservados.
+          © {new Date().getFullYear()} OCEANPARK Beauty & Perfumería. Todos los derechos reservados.
         </div>
       </footer>
 

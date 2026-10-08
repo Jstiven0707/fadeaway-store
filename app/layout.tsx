@@ -9,8 +9,8 @@ const anton = Anton({
 });
 
 export const metadata: Metadata = {
-  title: "FADEAWAY",
-  description: ".",
+  title: "OCEANPARK",
+  description: "Perfumes, cosméticos y accesorios. Envíos a todo el país.",
 };
 
 export default function RootLayout({

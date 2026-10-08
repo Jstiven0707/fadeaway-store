@@ -39,13 +39,13 @@ export default function SearchButton() {
             </button>
 
             <h3 className="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-4">
-              Buscar en FADEAWAY
+              Buscar en OCEANPARK
             </h3>
 
             <form onSubmit={handleSearch} className="flex gap-2">
               <input
                 type="text"
-                placeholder="Escribe lo que buscas (ej. Hoodie, Camiseta)..."
+                placeholder="Escribe lo que buscas (ej. perfume, labial, shampoo)..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 autoFocus
