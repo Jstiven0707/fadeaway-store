@@ -104,3 +104,11 @@ export const actualizarUsuario = (id: number, input: Partial<UsuarioInput>) =>
 
 export const eliminarUsuario = (id: number) =>
   pedir<null>(`/api/admin/usuarios/${id}`, { method: 'DELETE' });
+
+/** El owner genera un enlace para que alguien ponga una contraseña nueva. */
+export const generarEnlaceClave = (id: number) =>
+  pedir<{ token: string; horas: number }>(`/api/admin/usuarios/${id}/reset`, { method: 'POST' });
+
+/** Cambio de la propia contraseña, confirmando la actual. */
+export const cambiarMiPassword = (actual: string, password: string) =>
+  pedir<null>('/api/clave', conCuerpo('POST', { actual, password }));

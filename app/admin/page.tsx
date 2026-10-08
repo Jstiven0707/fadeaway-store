@@ -35,8 +35,10 @@ import {
   Usuario,
   UsuarioInput,
   actualizarUsuario,
+  cambiarMiPassword,
   cerrarSesion,
   crearPrimerUsuario,
+  generarEnlaceClave,
   crearUsuario,
   eliminarUsuario,
   fetchSesion,
@@ -83,6 +85,8 @@ export default function AdminDashboard() {
   const [usuarioForm, setUsuarioForm] = useState<UsuarioInput & { id?: number }>({
     nombre: '', usuario: '', email: '', password: '', rol: 'ASESOR', activo: true,
   });
+  const [miClave, setMiClave] = useState({ actual: '', nueva: '', abierto: false });
+  const [errorMiClave, setErrorMiClave] = useState<string | null>(null);
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
   const [errorUsuario, setErrorUsuario] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics' | 'settings' | 'usuarios'>('orders');
@@ -292,6 +296,38 @@ export default function AdminDashboard() {
       setErrorUsuario((error as Error).message);
     } finally {
       setGuardandoUsuario(false);
+    }
+  };
+
+  // Genera el enlace de recuperación y lo deja listo para enviar
+  const handleEnlaceClave = async (u: Usuario, porWhatsapp: boolean) => {
+    try {
+      const { token, horas } = await generarEnlaceClave(u.id);
+      const enlace = `${window.location.origin}/clave/${token}`;
+
+      if (porWhatsapp) {
+        const texto = encodeURIComponent(
+          `Hola ${u.nombre}, usa este enlace para poner tu contraseña de OCEANPARK. Vence en ${horas} horas: ${enlace}`
+        );
+        window.open(`https://wa.me/?text=${texto}`, '_blank');
+      } else {
+        await navigator.clipboard.writeText(enlace);
+        alert(`Enlace copiado. Vence en ${horas} horas y sirve una sola vez.`);
+      }
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  };
+
+  const handleCambiarMiClave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMiClave(null);
+    try {
+      await cambiarMiPassword(miClave.actual, miClave.nueva);
+      setMiClave({ actual: '', nueva: '', abierto: false });
+      alert('Tu contraseña quedó actualizada.');
+    } catch (error) {
+      setErrorMiClave((error as Error).message);
     }
   };
 
@@ -732,6 +768,13 @@ export default function AdminDashboard() {
             >
               {entrando ? 'Un momento...' : esSetup ? 'Crear cuenta y entrar' : 'Entrar al Panel'}
             </button>
+
+            {!esSetup && (
+              <p className="text-[10px] text-neutral-400 text-center leading-relaxed pt-1">
+                ¿Olvidaste tu contraseña? Pídele al dueño de la tienda que te genere un
+                enlace desde el panel.
+              </p>
+            )}
           </form>
         </div>
       </div>
@@ -1473,6 +1516,77 @@ export default function AdminDashboard() {
               </div>
             </form>
 
+            {/* Mi propia contraseña */}
+            <div className="bg-white rounded-xl border border-neutral-200 p-5 text-xs">
+              {!miClave.abierto ? (
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="font-bold text-neutral-900 uppercase">Tu contraseña</p>
+                    <p className="text-[11px] text-neutral-500 mt-0.5">
+                      Cámbiala cuando quieras. Nadie puede verla, ni siquiera desde la base de datos.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setMiClave({ ...miClave, abierto: true })}
+                    className="bg-neutral-100 hover:bg-neutral-200 text-neutral-900 font-bold px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleCambiarMiClave} className="space-y-3">
+                  <p className="font-bold text-neutral-900 uppercase">Cambiar tu contraseña</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Actual</label>
+                      <input
+                        type="password"
+                        required
+                        value={miClave.actual}
+                        onChange={(e) => setMiClave({ ...miClave, actual: e.target.value })}
+                        className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Nueva</label>
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        value={miClave.nueva}
+                        onChange={(e) => setMiClave({ ...miClave, nueva: e.target.value })}
+                        placeholder="Mínimo 8 caracteres"
+                        className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                      />
+                    </div>
+                  </div>
+                  {errorMiClave && (
+                    <p className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold rounded-xl p-3">
+                      {errorMiClave}
+                    </p>
+                  )}
+                  <div className="flex gap-3">
+                    <button
+                      type="submit"
+                      className="bg-black hover:bg-neutral-800 text-white font-bold py-2.5 px-6 rounded-xl uppercase tracking-wider transition-all"
+                    >
+                      Guardar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMiClave({ actual: '', nueva: '', abierto: false });
+                        setErrorMiClave(null);
+                      }}
+                      className="bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-bold py-2.5 px-5 rounded-xl uppercase tracking-wider transition-all"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+
             {/* Listado */}
             <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
@@ -1541,6 +1655,20 @@ export default function AdminDashboard() {
                                 className="bg-neutral-100 hover:bg-neutral-200 text-neutral-900 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
                               >
                                 ✏️ Editar
+                              </button>
+                              <button
+                                onClick={() => handleEnlaceClave(u, false)}
+                                title="Copiar enlace para que ponga una contraseña nueva"
+                                className="bg-amber-50 hover:bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                🔑 Enlace
+                              </button>
+                              <button
+                                onClick={() => handleEnlaceClave(u, true)}
+                                title="Enviar el enlace por WhatsApp"
+                                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                💬
                               </button>
                               {u.id !== usuario?.id && (
                                 <button

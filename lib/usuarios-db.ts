@@ -4,7 +4,8 @@
 
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
-import { filaAUsuario, hashPassword } from '@/lib/auth';
+import { randomBytes } from 'node:crypto';
+import { filaAUsuario, hashPassword, verificarPassword } from '@/lib/auth';
 import { Rol, Usuario, UsuarioInput } from '@/lib/usuarios';
 
 const ROLES_VALIDOS: Rol[] = ['OWNER', 'ADMINISTRADOR', 'ASESOR'];
@@ -137,4 +138,80 @@ export const eliminarUsuarioDb = async (id: number): Promise<boolean> => {
     [id]
   );
   return res.affectedRows > 0;
+};
+
+// ---------------------------------------------------------------------------
+// RECUPERACIÓN DE CONTRASEÑA
+//
+// Las contraseñas no se pueden leer: lo guardado es un hash scrypt, que no
+// se puede revertir. Recuperar significa poner una nueva, y para eso se usa
+// un enlace de un solo uso que caduca.
+// ---------------------------------------------------------------------------
+
+const HORAS_VALIDEZ = 2;
+
+/** Genera el enlace de restablecimiento y devuelve su token. */
+export const generarTokenReset = async (id: number): Promise<string | null> => {
+  const usuario = await obtenerUsuario(id);
+  if (!usuario) return null;
+
+  const token = randomBytes(32).toString('hex');
+  const expira = new Date(Date.now() + HORAS_VALIDEZ * 60 * 60 * 1000);
+
+  await db.query(`UPDATE usuarios SET token_reset = ?, token_reset_expira = ? WHERE id = ?`, [
+    token,
+    expira,
+    id,
+  ]);
+  return token;
+};
+
+/** Datos mínimos del dueño de un token, si sigue vigente. */
+export const usuarioPorToken = async (token: string) => {
+  const [filas] = await db.query<RowDataPacket[]>(
+    `SELECT id, nombre, usuario FROM usuarios
+      WHERE token_reset = ? AND token_reset_expira > NOW()
+        AND activo = 1 AND estado_regis = 'ACTIVO'`,
+    [token]
+  );
+  return filas.length ? { id: Number(filas[0].id), nombre: filas[0].nombre, usuario: filas[0].usuario } : null;
+};
+
+/** Cambia la contraseña y quema el token: cada enlace sirve una sola vez. */
+export const cambiarPasswordConToken = async (token: string, password: string): Promise<boolean> => {
+  if (!password || password.length < 8) {
+    throw new ErrorUsuario('La contraseña debe tener al menos 8 caracteres');
+  }
+
+  const usuario = await usuarioPorToken(token);
+  if (!usuario) return false;
+
+  await db.query(
+    `UPDATE usuarios SET password = ?, token_reset = NULL, token_reset_expira = NULL WHERE id = ?`,
+    [await hashPassword(password), usuario.id]
+  );
+  return true;
+};
+
+/** Cambio de contraseña desde el panel, confirmando la actual. */
+export const cambiarPasswordPropia = async (
+  id: number,
+  actual: string,
+  nueva: string
+): Promise<void> => {
+  if (!nueva || nueva.length < 8) {
+    throw new ErrorUsuario('La contraseña nueva debe tener al menos 8 caracteres');
+  }
+
+  const [filas] = await db.query<RowDataPacket[]>(
+    `SELECT password FROM usuarios WHERE id = ? AND estado_regis = 'ACTIVO'`,
+    [id]
+  );
+  if (filas.length === 0) throw new ErrorUsuario('Usuario no encontrado');
+
+  if (!(await verificarPassword(actual, filas[0].password))) {
+    throw new ErrorUsuario('La contraseña actual no es correcta');
+  }
+
+  await db.query(`UPDATE usuarios SET password = ? WHERE id = ?`, [await hashPassword(nueva), id]);
 };
