@@ -10,6 +10,8 @@ datasource db {
 model Categoria {
   id                    Int             @id @default(autoincrement())
   nombreCat             String          @map("nombre_cat") @db.VarChar(100)
+  /// Identificador en la URL: perfumeria, maquillaje, cabello...
+  slug                  String          @unique @db.VarChar(60)
   estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
   fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
   horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
@@ -23,6 +25,8 @@ model Subcategoria {
   id                    Int             @id @default(autoincrement())
   idCategoria           Int             @map("id_categoria")
   nombreSubcat          String          @map("nombre_subcat") @db.VarChar(100)
+  /// Segunda parte de la URL: mujer, bases, mascarillas...
+  slug                  String          @db.VarChar(60)
   imageUrl              String?         @map("image_url") @db.VarChar(255)
   estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
   fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
@@ -32,6 +36,7 @@ model Subcategoria {
   categoria             Categoria       @relation(fields: [idCategoria], references: [id], onDelete: Cascade)
   productos             Producto[]
 
+  @@unique([idCategoria, slug])
   @@map("subcategorias")
 }
 
@@ -42,6 +47,8 @@ model Producto {
   descripcion           String?         @db.Text
   precio                Decimal         @db.Decimal(10, 2)
   imageUrl              String?         @map("image_url") @db.VarChar(255)
+  /// Se muestra ademas en la seccion Nuevos Lanzamientos
+  esLanzamiento         Boolean         @default(false) @map("es_lanzamiento")
   estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
   fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
   horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
