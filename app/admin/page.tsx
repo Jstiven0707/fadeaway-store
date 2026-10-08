@@ -1073,11 +1073,22 @@ export default function AdminDashboard() {
                       products.map((prod) => (
                         <tr key={prod.id} className="hover:bg-neutral-50 transition-colors">
                           <td className="p-4">
-                            <img
-                              src={prod.image}
-                              alt={prod.name}
-                              className="h-12 w-12 object-contain rounded-lg border border-neutral-200 bg-white p-1"
-                            />
+                            {/* Sin foto no se pinta un <img> vacio: el navegador
+                                interpreta src="" como recargar la pagina entera. */}
+                            {prod.image ? (
+                              <img
+                                src={prod.image}
+                                alt={prod.name}
+                                className="h-12 w-12 object-contain rounded-lg border border-neutral-200 bg-white p-1"
+                              />
+                            ) : (
+                              <div
+                                title="Este producto no tiene foto"
+                                className="h-12 w-12 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 flex items-center justify-center text-neutral-300 text-lg"
+                              >
+                                🖼
+                              </div>
+                            )}
                           </td>
                           <td className="p-4 font-bold text-neutral-900">{prod.id}</td>
                           <td className="p-4 max-w-xs">
