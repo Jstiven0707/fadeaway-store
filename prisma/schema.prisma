@@ -1,58 +1,134 @@
-datasource db {
-  provider = "mysql"
-}
-
 generator client {
   provider = "prisma-client-js"
 }
 
-model Category {
-  id_categoria Int       @id @default(autoincrement())
-  descripcion  String    @db.VarChar(50)
-  slug         String    @unique @db.VarChar(50)
-  products     Product[]
-
-  @@map("categories")
+// En Prisma 7 la URL de conexión ya no va aquí: se define en prisma7.config.ts
+datasource db {
+  provider = "mysql"
 }
 
-model Product {
-  id               String            @id @default(uuid()) @db.VarChar(36)
-  title            String            @db.VarChar(255)
-  slug             String            @unique @db.VarChar(255)
-  description      String?           @db.Text
-  price            Decimal           @db.Decimal(10, 2)
-  category_id      Int?
-  images           Json?             
-  is_featured      Boolean           @default(false)
-  created_at       DateTime          @default(now())
-  
-  category         Category?         @relation(fields: [category_id], references: [id_categoria], onDelete: SetNull)
-  fragranceDetails FragranceDetail?
-  variants         ProductVariant[]
+model Categoria {
+  id                    Int             @id @default(autoincrement())
+  nombreCat             String          @map("nombre_cat") @db.VarChar(100)
+  estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
+  fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
+  horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
+  fechahoraModificacion DateTime        @default(now()) @updatedAt @map("Fechahora_modificacion")
+  subcategorias         Subcategoria[]
 
-  @@map("products")
+  @@map("categorias")
 }
 
-model FragranceDetail {
-  product_id          String   @id @db.VarChar(36)
-  nombre_perfume      String   @db.VarChar(255)
-  descripcion_perfume String?  @db.Text
-  volume_ml           Int
+model Subcategoria {
+  id                    Int             @id @default(autoincrement())
+  idCategoria           Int             @map("id_categoria")
+  nombreSubcat          String          @map("nombre_subcat") @db.VarChar(100)
+  imageUrl              String?         @map("image_url") @db.VarChar(255)
+  estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
+  fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
+  horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
+  fechahoraModificacion DateTime        @default(now()) @updatedAt @map("Fechahora_modificacion")
   
-  product             Product  @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  categoria             Categoria       @relation(fields: [idCategoria], references: [id], onDelete: Cascade)
+  productos             Producto[]
 
-  @@map("fragrance_details")
+  @@map("subcategorias")
+}
+
+model Producto {
+  id                    Int             @id @default(autoincrement())
+  idSubcategoria        Int             @map("id_subcategoria")
+  nombre                String          @db.VarChar(150)
+  descripcion           String?         @db.Text
+  precio                Decimal         @db.Decimal(10, 2)
+  imageUrl              String?         @map("image_url") @db.VarChar(255)
+  estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
+  fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
+  horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
+  fechahoraModificacion DateTime        @default(now()) @updatedAt @map("Fechahora_modificacion")
+
+  subcategoria          Subcategoria    @relation(fields: [idSubcategoria], references: [id], onDelete: Cascade)
+  variants              ProductVariant[]
+  detalleOrdenes        DetalleOrden[]
+
+  @@map("productos")
 }
 
 model ProductVariant {
-  id         String   @id @default(uuid()) @db.VarChar(36)
-  product_id String?  @db.VarChar(36)
-  size       String?  @db.VarChar(20)
-  color      String?  @db.VarChar(50)
-  stock      Int      @default(0)
-  created_at DateTime @default(now())
-  
-  product    Product? @relation(fields: [product_id], references: [id], onDelete: Cascade)
+  id           Int          @id @default(autoincrement())
+  idProducto   Int          @map("id_producto")
+  /// Presentación de venta: 30ml, 50ml, 100ml, 200g, Único...
+  presentacion String       @db.VarChar(40)
+  stock        Int          @default(0)
+  estadoRegis  EstadoRegis  @default(ACTIVO) @map("estado_regis")
+
+  producto     Producto     @relation(fields: [idProducto], references: [id], onDelete: Cascade)
 
   @@map("product_variants")
+}
+
+model Usuario {
+  id                    Int             @id @default(autoincrement())
+  nombre                String          @db.VarChar(100)
+  email                 String          @unique @db.VarChar(150)
+  password              String          @db.VarChar(255)
+  rol                   RolUsuario?     @default(cliente)
+  estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
+  fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
+  horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
+  fechahoraModificacion DateTime        @default(now()) @updatedAt @map("Fechahora_modificacion")
+  ordenes               Orden[]
+
+  @@map("usuarios")
+}
+
+model Orden {
+  id             Int             @id @default(autoincrement())
+  idUsuario      Int?            @map("id_usuario")
+  total          Decimal         @db.Decimal(10, 2)
+  estado         EstadoOrden?    @default(Pendiente)
+  direccionEnvio String          @map("direccion_envio") @db.Text
+  telefono       String          @db.VarChar(30)
+  estadoRegis    EstadoRegis     @default(ACTIVO) @map("estado_regis")
+  fechaCrecion   DateTime        @db.Date @map("fecha_crecion")
+  horaDeCrecion  DateTime        @db.Time @map("hora_de_crecion")
+
+  usuario        Usuario?        @relation(fields: [idUsuario], references: [id], onDelete: SetNull)
+  detalles       DetalleOrden[]
+
+  @@map("ordenes")
+}
+
+model DetalleOrden {
+  id             Int         @id @default(autoincrement())
+  idOrden        Int         @map("id_orden")
+  idProducto     Int?        @map("id_producto")
+  /// Presentación vendida (antes era "talla")
+  presentacion   String      @db.VarChar(40)
+  cantidad       Int
+  precioUnitario Decimal     @db.Decimal(10, 2) @map("precio_unitario")
+  estadoRegis    EstadoRegis @default(ACTIVO) @map("estado_regis")
+
+  orden          Orden       @relation(fields: [idOrden], references: [id], onDelete: Cascade)
+  producto       Producto?   @relation(fields: [idProducto], references: [id], onDelete: SetNull)
+
+  @@map("detalle_ordenes")
+}
+
+enum EstadoRegis {
+  ACTIVO
+  INACTIVO
+}
+
+enum RolUsuario {
+  admin
+  cliente
+}
+
+enum EstadoOrden {
+  Pendiente
+  Pagado
+  Enviado
+  Entregado
+  Cancelado
 }
