@@ -43,6 +43,8 @@ export const puede = (rol: Rol | undefined, permiso: Permiso): boolean =>
 export interface Usuario {
   id: number;
   nombre: string;
+  /** Con esto se inicia sesión */
+  usuario: string;
   email: string;
   rol: Rol;
   activo: boolean;
@@ -51,6 +53,7 @@ export interface Usuario {
 
 export interface UsuarioInput {
   nombre: string;
+  usuario: string;
   email: string;
   password?: string;
   rol: Rol;
@@ -81,8 +84,9 @@ export interface EstadoSesion {
 
 export const fetchSesion = () => pedir<EstadoSesion>('/api/auth/me');
 
-export const iniciarSesion = (email: string, password: string) =>
-  pedir<Usuario>('/api/auth/login', conCuerpo('POST', { email, password }));
+/** Acepta nombre de usuario o correo en el mismo campo. */
+export const iniciarSesion = (identificador: string, password: string) =>
+  pedir<Usuario>('/api/auth/login', conCuerpo('POST', { identificador, password }));
 
 export const cerrarSesion = () => pedir<null>('/api/auth/logout', { method: 'POST' });
 

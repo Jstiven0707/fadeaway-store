@@ -103,6 +103,7 @@ export const cerrarSesionCookie = async () => {
 export const filaAUsuario = (r: RowDataPacket): Usuario => ({
   id: Number(r.id),
   nombre: r.nombre,
+  usuario: r.usuario,
   email: r.email,
   rol: r.rol as Rol,
   activo: Boolean(r.activo),
@@ -120,7 +121,7 @@ export const sesionActual = async (): Promise<Usuario | null> => {
   if (!carga) return null;
 
   const [filas] = await db.query<RowDataPacket[]>(
-    `SELECT id, nombre, email, rol, activo, ultimo_acceso
+    `SELECT id, nombre, usuario, email, rol, activo, ultimo_acceso
        FROM usuarios WHERE id = ? AND activo = 1 AND estado_regis = 'ACTIVO'`,
     [carga.id]
   );

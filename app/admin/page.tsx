@@ -67,7 +67,9 @@ export default function AdminDashboard() {
   // 1. ESTADOS DE AUTENTICACIÓN Y NAVEGACIÓN
   // null mientras se consulta la sesion al servidor
   const [sesion, setSesion] = useState<EstadoSesion | null>(null);
-  const [credentials, setCredentials] = useState({ email: '', password: '', nombre: '' });
+  const [credentials, setCredentials] = useState({
+    identificador: '', password: '', nombre: '', usuario: '', email: '',
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [entrando, setEntrando] = useState(false);
@@ -79,7 +81,7 @@ export default function AdminDashboard() {
   // Usuarios del panel (solo los ve el owner)
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [usuarioForm, setUsuarioForm] = useState<UsuarioInput & { id?: number }>({
-    nombre: '', email: '', password: '', rol: 'ASESOR', activo: true,
+    nombre: '', usuario: '', email: '', password: '', rol: 'ASESOR', activo: true,
   });
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
   const [errorUsuario, setErrorUsuario] = useState<string | null>(null);
@@ -219,13 +221,14 @@ export default function AdminDashboard() {
       const u = esSetup
         ? await crearPrimerUsuario({
             nombre: credentials.nombre,
+            usuario: credentials.usuario,
             email: credentials.email,
             password: credentials.password,
             rol: 'OWNER',
           })
-        : await iniciarSesion(credentials.email, credentials.password);
+        : await iniciarSesion(credentials.identificador, credentials.password);
       setSesion({ usuario: u, necesitaSetup: false });
-      setCredentials({ email: '', password: '', nombre: '' });
+      setCredentials({ identificador: '', password: '', nombre: '', usuario: '', email: '' });
     } catch (error) {
       setLoginError((error as Error).message);
       // El estado pudo cambiar desde que se abrió la pantalla: si ya hay
@@ -283,7 +286,7 @@ export default function AdminDashboard() {
       } else {
         await crearUsuario(usuarioForm);
       }
-      setUsuarioForm({ nombre: '', email: '', password: '', rol: 'ASESOR', activo: true });
+      setUsuarioForm({ nombre: '', usuario: '', email: '', password: '', rol: 'ASESOR', activo: true });
       await cargarUsuarios();
     } catch (error) {
       setErrorUsuario((error as Error).message);
@@ -641,31 +644,62 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {esSetup && (
+            {esSetup ? (
+              <>
+                <div>
+                  <label className="block font-bold text-neutral-800 uppercase mb-1">Tu nombre</label>
+                  <input
+                    type="text"
+                    required
+                    value={credentials.nombre}
+                    onChange={(e) => setCredentials({ ...credentials, nombre: e.target.value })}
+                    placeholder="Ej. Stiven Caro"
+                    className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-neutral-800 uppercase mb-1">Usuario</label>
+                  <input
+                    type="text"
+                    required
+                    value={credentials.usuario}
+                    onChange={(e) => setCredentials({ ...credentials, usuario: e.target.value })}
+                    placeholder="Ej. stiven"
+                    className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
+                  />
+                  <p className="text-[10px] text-neutral-400 mt-1.5">Con esto entras al panel.</p>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-neutral-800 uppercase mb-1">Correo</label>
+                  <input
+                    type="email"
+                    required
+                    value={credentials.email}
+                    onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
+                    placeholder="tucorreo@oceanpark.com"
+                    className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
+                  />
+                  <p className="text-[10px] text-neutral-400 mt-1.5">
+                    Solo para recuperar la contraseña si se te olvida.
+                  </p>
+                </div>
+              </>
+            ) : (
               <div>
-                <label className="block font-bold text-neutral-800 uppercase mb-1">Tu nombre</label>
+                <label className="block font-bold text-neutral-800 uppercase mb-1">Usuario</label>
                 <input
                   type="text"
                   required
-                  value={credentials.nombre}
-                  onChange={(e) => setCredentials({ ...credentials, nombre: e.target.value })}
-                  placeholder="Ej. Stiven Caro"
+                  autoComplete="username"
+                  value={credentials.identificador}
+                  onChange={(e) => setCredentials({ ...credentials, identificador: e.target.value })}
+                  placeholder="Tu usuario o tu correo"
                   className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
                 />
               </div>
             )}
-
-            <div>
-              <label className="block font-bold text-neutral-800 uppercase mb-1">Correo</label>
-              <input
-                type="email"
-                required
-                value={credentials.email}
-                onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
-                placeholder="tucorreo@oceanpark.com"
-                className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
-              />
-            </div>
 
             <div>
               <label className="block font-bold text-neutral-800 uppercase mb-1">Contraseña</label>
@@ -1360,6 +1394,18 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div>
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Usuario</label>
+                  <input
+                    type="text"
+                    required
+                    value={usuarioForm.usuario}
+                    onChange={(e) => setUsuarioForm({ ...usuarioForm, usuario: e.target.value })}
+                    placeholder="laura"
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                  <p className="text-[10px] text-neutral-400 mt-1">Con esto inicia sesión.</p>
+                </div>
+                <div>
                   <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Correo</label>
                   <input
                     type="email"
@@ -1416,7 +1462,7 @@ export default function AdminDashboard() {
                   <button
                     type="button"
                     onClick={() => {
-                      setUsuarioForm({ nombre: '', email: '', password: '', rol: 'ASESOR', activo: true });
+                      setUsuarioForm({ nombre: '', usuario: '', email: '', password: '', rol: 'ASESOR', activo: true });
                       setErrorUsuario(null);
                     }}
                     className="bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-bold py-3 px-6 rounded-xl uppercase tracking-wider transition-all"
@@ -1434,6 +1480,7 @@ export default function AdminDashboard() {
                   <thead>
                     <tr className="bg-neutral-100 text-neutral-500 font-bold uppercase tracking-wider border-b border-neutral-200">
                       <th className="p-4">Nombre</th>
+                      <th className="p-4">Usuario</th>
                       <th className="p-4">Correo</th>
                       <th className="p-4">Perfil</th>
                       <th className="p-4">Último acceso</th>
@@ -1443,7 +1490,7 @@ export default function AdminDashboard() {
                   <tbody className="divide-y divide-neutral-200 font-medium">
                     {usuarios.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="text-center py-8 text-neutral-400">
+                        <td colSpan={6} className="text-center py-8 text-neutral-400">
                           Cargando usuarios...
                         </td>
                       </tr>
@@ -1463,6 +1510,7 @@ export default function AdminDashboard() {
                               </span>
                             )}
                           </td>
+                          <td className="p-4 font-semibold text-neutral-700">{u.usuario}</td>
                           <td className="p-4 text-neutral-600">{u.email}</td>
                           <td className="p-4">
                             <span
@@ -1485,7 +1533,7 @@ export default function AdminDashboard() {
                               <button
                                 onClick={() => {
                                   setUsuarioForm({
-                                    id: u.id, nombre: u.nombre, email: u.email,
+                                    id: u.id, nombre: u.nombre, usuario: u.usuario, email: u.email,
                                     password: '', rol: u.rol, activo: u.activo,
                                   });
                                   setErrorUsuario(null);

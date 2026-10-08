@@ -18,6 +18,11 @@ export const leerEntradaUsuario = (body: unknown, exigirPassword: boolean): Usua
   if (!nombre) throw new ErrorUsuario('El nombre es obligatorio');
   if (nombre.length > 100) throw new ErrorUsuario('El nombre es demasiado largo');
 
+  const usuario = String(b.usuario ?? '').trim().toLowerCase();
+  if (!/^[a-z0-9._-]{3,40}$/.test(usuario)) {
+    throw new ErrorUsuario('El usuario debe tener 3 a 40 caracteres: letras, números, punto, guion o guion bajo');
+  }
+
   const email = String(b.email ?? '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ErrorUsuario('El correo no es válido');
   if (email.length > 150) throw new ErrorUsuario('El correo es demasiado largo');
@@ -32,12 +37,12 @@ export const leerEntradaUsuario = (body: unknown, exigirPassword: boolean): Usua
     }
   }
 
-  return { nombre, email, rol, password, activo: b.activo === undefined ? true : b.activo === true };
+  return { nombre, usuario, email, rol, password, activo: b.activo === undefined ? true : b.activo === true };
 };
 
 export const listarUsuarios = async (): Promise<Usuario[]> => {
   const [filas] = await db.query<RowDataPacket[]>(
-    `SELECT id, nombre, email, rol, activo, ultimo_acceso
+    `SELECT id, nombre, usuario, email, rol, activo, ultimo_acceso
        FROM usuarios WHERE estado_regis = 'ACTIVO' ORDER BY id`
   );
   return filas.map(filaAUsuario);
@@ -45,7 +50,7 @@ export const listarUsuarios = async (): Promise<Usuario[]> => {
 
 export const obtenerUsuario = async (id: number): Promise<Usuario | null> => {
   const [filas] = await db.query<RowDataPacket[]>(
-    `SELECT id, nombre, email, rol, activo, ultimo_acceso
+    `SELECT id, nombre, usuario, email, rol, activo, ultimo_acceso
        FROM usuarios WHERE id = ? AND estado_regis = 'ACTIVO'`,
     [id]
   );
@@ -54,15 +59,21 @@ export const obtenerUsuario = async (id: number): Promise<Usuario | null> => {
 
 export const crearUsuarioDb = async (entrada: UsuarioInput): Promise<Usuario> => {
   const [existe] = await db.query<RowDataPacket[]>(
-    `SELECT id FROM usuarios WHERE email = ? AND estado_regis = 'ACTIVO'`,
-    [entrada.email]
+    `SELECT usuario, email FROM usuarios WHERE (email = ? OR usuario = ?) AND estado_regis = 'ACTIVO'`,
+    [entrada.email, entrada.usuario]
   );
-  if (existe.length > 0) throw new ErrorUsuario('Ya hay un usuario con ese correo');
+  if (existe.length > 0) {
+    throw new ErrorUsuario(
+      existe[0].usuario === entrada.usuario
+        ? 'Ese nombre de usuario ya está ocupado'
+        : 'Ya hay una cuenta con ese correo'
+    );
+  }
 
   const [res] = await db.query<ResultSetHeader>(
-    `INSERT INTO usuarios (nombre, email, password, rol, activo, estado_regis, fecha_crecion, hora_de_crecion)
-     VALUES (?, ?, ?, ?, ?, 'ACTIVO', CURDATE(), CURTIME())`,
-    [entrada.nombre, entrada.email, await hashPassword(entrada.password!), entrada.rol, entrada.activo !== false]
+    `INSERT INTO usuarios (nombre, usuario, email, password, rol, activo, estado_regis, fecha_crecion, hora_de_crecion)
+     VALUES (?, ?, ?, ?, ?, ?, 'ACTIVO', CURDATE(), CURTIME())`,
+    [entrada.nombre, entrada.usuario, entrada.email, await hashPassword(entrada.password!), entrada.rol, entrada.activo !== false]
   );
 
   const creado = await obtenerUsuario(res.insertId);
@@ -78,12 +89,20 @@ export const actualizarUsuarioDb = async (
   const valores: (string | number | boolean)[] = [];
 
   if (entrada.nombre) { campos.push('nombre = ?'); valores.push(entrada.nombre); }
+  if (entrada.usuario) {
+    const [existe] = await db.query<RowDataPacket[]>(
+      `SELECT id FROM usuarios WHERE usuario = ? AND id <> ? AND estado_regis = 'ACTIVO'`,
+      [entrada.usuario, id]
+    );
+    if (existe.length > 0) throw new ErrorUsuario('Ese nombre de usuario ya está ocupado');
+    campos.push('usuario = ?'); valores.push(entrada.usuario);
+  }
   if (entrada.email) {
     const [existe] = await db.query<RowDataPacket[]>(
       `SELECT id FROM usuarios WHERE email = ? AND id <> ? AND estado_regis = 'ACTIVO'`,
       [entrada.email, id]
     );
-    if (existe.length > 0) throw new ErrorUsuario('Ya hay otro usuario con ese correo');
+    if (existe.length > 0) throw new ErrorUsuario('Ya hay otra cuenta con ese correo');
     campos.push('email = ?'); valores.push(entrada.email);
   }
   if (entrada.rol) { campos.push('rol = ?'); valores.push(entrada.rol); }

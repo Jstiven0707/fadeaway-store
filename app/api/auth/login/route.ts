@@ -3,20 +3,28 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
 import { abrirSesion, filaAUsuario, verificarPassword } from '@/lib/auth';
 
-/** Mismo mensaje para email inexistente y clave mala: no revela qué correos existen. */
-const CREDENCIALES = 'Correo o contraseña incorrectos';
+/** Mismo mensaje para usuario inexistente y clave mala: no revela qué cuentas existen. */
+const CREDENCIALES = 'Usuario o contraseña incorrectos';
 
 export async function POST(request: Request) {
   try {
-    const { email, password } = (await request.json()) as { email?: string; password?: string };
-    if (!email || !password) {
+    const body = (await request.json()) as {
+      identificador?: string;
+      email?: string;
+      password?: string;
+    };
+    // Se acepta el nombre de usuario o el correo, lo que la persona recuerde
+    const identificador = (body.identificador ?? body.email ?? '').trim().toLowerCase();
+    const password = body.password;
+
+    if (!identificador || !password) {
       return NextResponse.json({ success: false, error: CREDENCIALES }, { status: 401 });
     }
 
     const [filas] = await db.query<RowDataPacket[]>(
-      `SELECT id, nombre, email, rol, activo, ultimo_acceso, password
-         FROM usuarios WHERE email = ? AND estado_regis = 'ACTIVO'`,
-      [email.trim().toLowerCase()]
+      `SELECT id, nombre, usuario, email, rol, activo, ultimo_acceso, password
+         FROM usuarios WHERE (usuario = ? OR email = ?) AND estado_regis = 'ACTIVO'`,
+      [identificador, identificador]
     );
 
     const fila = filas[0];

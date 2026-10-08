@@ -78,6 +78,9 @@ model ProductVariant {
 model Usuario {
   id                    Int             @id @default(autoincrement())
   nombre                String          @db.VarChar(100)
+  /// Con esto se inicia sesion; tambien sirve el correo
+  usuario               String          @unique @db.VarChar(40)
+  /// Para recuperar la contraseña y para avisos
   email                 String          @unique @db.VarChar(150)
   /// Hash scrypt de la contraseña: salt:derivada, nunca el texto plano
   password              String          @db.VarChar(255)
