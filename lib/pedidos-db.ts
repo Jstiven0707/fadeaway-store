@@ -429,3 +429,43 @@ export const guardarAjustesDb = async (entrada: Partial<AjustesPago>): Promise<A
   }
   return leerAjustes();
 };
+
+/**
+ * Baja logica de un pedido. Solo el owner puede llamarla.
+ *
+ * El pedido y sus pagos quedan INACTIVO en vez de borrarse, para no dejar
+ * huecos en la contabilidad. El inventario se repone unicamente si el pedido
+ * seguia vivo: si ya se entrego, la mercancia salio de verdad, y si estaba
+ * cancelado el stock ya habia vuelto.
+ */
+export const eliminarPedido = async (id: number): Promise<boolean> => {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [filas] = await conn.query<RowDataPacket[]>(
+      `SELECT estado FROM ordenes WHERE id = ? AND estado_regis = 'ACTIVO' FOR UPDATE`,
+      [id]
+    );
+    if (filas.length === 0) {
+      await conn.rollback();
+      return false;
+    }
+
+    const estado = filas[0].estado as EstadoOrden;
+    if (estado !== 'ENTREGADO' && estado !== 'CANCELADO') {
+      await reponerStock(conn, id);
+    }
+
+    await conn.query(`UPDATE pagos SET estado_regis = 'INACTIVO' WHERE id_orden = ?`, [id]);
+    await conn.query(`UPDATE ordenes SET estado_regis = 'INACTIVO' WHERE id = ?`, [id]);
+
+    await conn.commit();
+    return true;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+};

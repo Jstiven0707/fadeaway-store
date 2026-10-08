@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
 import { crearProducto, filaAProducto, leerEntrada, SELECT_PRODUCTO } from '@/lib/productos-db';
+import { ErrorAuth, exigir } from '@/lib/auth';
 
 /**
  * GET /api/products
@@ -68,8 +69,12 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   let entrada;
   try {
+    await exigir('catalogo');
     entrada = leerEntrada(await request.json());
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       { success: false, error: (error as Error).message },
       { status: 400 }

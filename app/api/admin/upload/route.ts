@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import { ErrorAuth, exigir } from '@/lib/auth';
 
 const MAX_BYTES = 8 * 1024 * 1024; // 8 MB de entrada
 const ANCHO_MAXIMO = 1200; // se reescala antes de guardar
@@ -23,6 +24,7 @@ const CARPETA = path.join(process.cwd(), 'public', 'uploads');
  */
 export async function POST(request: Request) {
   try {
+    await exigir('catalogo');
     const formData = await request.formData();
     const archivo = formData.get('file');
 
@@ -67,6 +69,9 @@ export async function POST(request: Request) {
       bytes: salida.length,
     });
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     console.error('Error subiendo la imagen:', error);
     return NextResponse.json(
       { success: false, error: 'No se pudo procesar la imagen' },

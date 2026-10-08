@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { actualizarProducto, eliminarProducto, leerEntrada, obtenerProducto } from '@/lib/productos-db';
+import { ErrorAuth, exigir } from '@/lib/auth';
 
 // En Next 16 params es una Promise y hay que esperarla.
 type Contexto = { params: Promise<{ id: string }> };
@@ -37,8 +38,12 @@ export async function PUT(request: Request, ctx: Contexto) {
 
   let entrada;
   try {
+    await exigir('catalogo');
     entrada = leerEntrada(await request.json());
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     return NextResponse.json({ success: false, error: (error as Error).message }, { status: 400 });
   }
 
@@ -65,12 +70,16 @@ export async function DELETE(_request: Request, ctx: Contexto) {
   if (!id) return NextResponse.json({ success: false, error: 'Id invalido' }, { status: 400 });
 
   try {
+    await exigir('catalogo');
     const ok = await eliminarProducto(id);
     if (!ok) {
       return NextResponse.json({ success: false, error: 'Producto no encontrado' }, { status: 404 });
     }
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     console.error('Error al eliminar el producto:', error);
     return NextResponse.json(
       { success: false, error: 'Error al eliminar el producto' },

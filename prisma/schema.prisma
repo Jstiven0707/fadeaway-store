@@ -79,8 +79,12 @@ model Usuario {
   id                    Int             @id @default(autoincrement())
   nombre                String          @db.VarChar(100)
   email                 String          @unique @db.VarChar(150)
+  /// Hash scrypt de la contraseña: salt:derivada, nunca el texto plano
   password              String          @db.VarChar(255)
-  rol                   RolUsuario?     @default(cliente)
+  rol                   RolUsuario      @default(ASESOR)
+  /// Al desactivarlo el usuario no puede entrar, pero su historial se conserva
+  activo                Boolean         @default(true)
+  ultimoAcceso          DateTime?       @map("ultimo_acceso")
   estadoRegis           EstadoRegis     @default(ACTIVO) @map("estado_regis")
   fechaCrecion          DateTime        @db.Date @map("fecha_crecion")
   horaDeCrecion         DateTime        @db.Time @map("hora_de_crecion")
@@ -215,9 +219,14 @@ enum EstadoRegis {
   INACTIVO
 }
 
+/// Perfiles del panel.
+///   OWNER         dueño: todo, incluido eliminar pedidos y gestionar usuarios
+///   ADMINISTRADOR opera la tienda completa, pero no borra ni crea usuarios
+///   ASESOR        solo atiende pedidos: ve, cambia estados y registra ventas
 enum RolUsuario {
-  admin
-  cliente
+  OWNER
+  ADMINISTRADOR
+  ASESOR
 }
 
 /// Flujo del pedido en dos etapas.

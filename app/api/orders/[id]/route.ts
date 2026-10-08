@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { ErrorPedido, cambiarEstado, obtenerPedido } from '@/lib/pedidos-db';
+import { ErrorPedido, cambiarEstado, eliminarPedido, obtenerPedido } from '@/lib/pedidos-db';
+import { ErrorAuth, exigir } from '@/lib/auth';
 import { ORDEN_ESTADOS, type EstadoOrden } from '@/lib/pedidos';
 
 // En Next 16 params es una Promise.
@@ -16,12 +17,16 @@ export async function GET(_request: Request, ctx: Contexto) {
   if (!id) return NextResponse.json({ success: false, error: 'Id inválido' }, { status: 400 });
 
   try {
+    await exigir('pedidos');
     const pedido = await obtenerPedido(id);
     if (!pedido) {
       return NextResponse.json({ success: false, error: 'Pedido no encontrado' }, { status: 404 });
     }
     return NextResponse.json({ success: true, data: pedido });
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     console.error('Error al leer el pedido:', error);
     return NextResponse.json({ success: false, error: 'Error en la base de datos' }, { status: 500 });
   }
@@ -33,6 +38,7 @@ export async function PATCH(request: Request, ctx: Contexto) {
   if (!id) return NextResponse.json({ success: false, error: 'Id inválido' }, { status: 400 });
 
   try {
+    await exigir('pedidos');
     const body = (await request.json()) as { estado?: string; nota?: string; referenciaPago?: string };
     const estado = body.estado as EstadoOrden;
 
@@ -46,10 +52,39 @@ export async function PATCH(request: Request, ctx: Contexto) {
     }
     return NextResponse.json({ success: true, data: pedido });
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     if (error instanceof ErrorPedido) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
     }
     console.error('Error al cambiar el estado:', error);
     return NextResponse.json({ success: false, error: 'No se pudo cambiar el estado' }, { status: 500 });
+  }
+}
+
+/**
+ * DELETE /api/orders/[id] — elimina un pedido.
+ *
+ * Reservado al perfil owner: borrar un pedido mueve inventario y borra el
+ * pago asociado, asi que no es algo que deba poder hacer cualquiera.
+ */
+export async function DELETE(_request: Request, ctx: Contexto) {
+  const id = await leerId(ctx);
+  if (!id) return NextResponse.json({ success: false, error: 'Id inválido' }, { status: 400 });
+
+  try {
+    await exigir('eliminarPedidos');
+    const ok = await eliminarPedido(id);
+    if (!ok) {
+      return NextResponse.json({ success: false, error: 'Pedido no encontrado' }, { status: 404 });
+    }
+    return NextResponse.json({ success: true, data: null });
+  } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
+    console.error('Error al eliminar el pedido:', error);
+    return NextResponse.json({ success: false, error: 'No se pudo eliminar el pedido' }, { status: 500 });
   }
 }

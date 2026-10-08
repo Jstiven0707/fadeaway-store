@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
 import { ErrorPedido, crearPedidoDb, leerEntradaPedido, listarPedidos } from '@/lib/pedidos-db';
+import { ErrorAuth, exigir } from '@/lib/auth';
 
 /** GET /api/orders?estado=ENVIADO — bandeja del admin. */
 export async function GET(request: Request) {
   try {
+    await exigir('pedidos');
     const { searchParams } = new URL(request.url);
     const pedidos = await listarPedidos(searchParams.get('estado') ?? undefined);
     return NextResponse.json({ success: true, data: pedidos });
   } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
     console.error('Error al listar pedidos:', error);
     return NextResponse.json(
       { success: false, error: 'Error al conectar con la base de datos' },

@@ -21,12 +21,29 @@ import {
   Pedido,
   cambiarEstadoPedido,
   crearPedido,
+  eliminarPedido,
   fetchAjustes,
   fetchPagos,
   fetchPedidos,
   guardarAjustes,
   rangoDe,
 } from '@/lib/pedidos';
+import {
+  EstadoSesion,
+  ROLES,
+  Rol,
+  Usuario,
+  UsuarioInput,
+  actualizarUsuario,
+  cerrarSesion,
+  crearPrimerUsuario,
+  crearUsuario,
+  eliminarUsuario,
+  fetchSesion,
+  fetchUsuarios,
+  iniciarSesion,
+  puede,
+} from '@/lib/usuarios';
 import {
   Presentacion,
   Product,
@@ -48,11 +65,25 @@ const presentacionesPorDefecto = (categoria: string): Presentacion[] =>
 
 export default function AdminDashboard() {
   // 1. ESTADOS DE AUTENTICACIÓN Y NAVEGACIÓN
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [credentials, setCredentials] = useState({ username: '', password: '' });
+  // null mientras se consulta la sesion al servidor
+  const [sesion, setSesion] = useState<EstadoSesion | null>(null);
+  const [credentials, setCredentials] = useState({ email: '', password: '', nombre: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics' | 'settings'>('orders');
+  const [entrando, setEntrando] = useState(false);
+
+  const usuario = sesion?.usuario ?? null;
+  const isAuthenticated = !!usuario;
+  const permiso = (p: Parameters<typeof puede>[1]) => puede(usuario?.rol, p);
+
+  // Usuarios del panel (solo los ve el owner)
+  const [usuarios, setUsuarios] = useState<Usuario[]>([]);
+  const [usuarioForm, setUsuarioForm] = useState<UsuarioInput & { id?: number }>({
+    nombre: '', email: '', password: '', rol: 'ASESOR', activo: true,
+  });
+  const [guardandoUsuario, setGuardandoUsuario] = useState(false);
+  const [errorUsuario, setErrorUsuario] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics' | 'settings' | 'usuarios'>('orders');
 
   // 2. ESTADOS DE PEDIDOS Y PRODUCTOS
   const [orders, setOrders] = useState<Pedido[]>([]);
@@ -170,13 +201,110 @@ export default function AdminDashboard() {
   }, [isAuthenticated, cargarProductos]);
 
   // LOGIN DE ACCESO
-  const handleLogin = (e: React.FormEvent) => {
+  // La sesion vive en una cookie firmada, no en el estado de React. Al cargar
+  // la pagina se le pregunta al servidor quien esta adentro.
+  useEffect(() => {
+    fetchSesion()
+      .then(setSesion)
+      .catch(() => setSesion({ usuario: null, necesitaSetup: false }));
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (credentials.username === 'admin' && credentials.password === 'fadeaway2026') {
-      setIsAuthenticated(true);
-      setLoginError('');
-    } else {
-      setLoginError('Contraseña o usuario inválido');
+    if (entrando) return;
+    setEntrando(true);
+    setLoginError('');
+    try {
+      const esSetup = sesion?.necesitaSetup === true;
+      const u = esSetup
+        ? await crearPrimerUsuario({
+            nombre: credentials.nombre,
+            email: credentials.email,
+            password: credentials.password,
+            rol: 'OWNER',
+          })
+        : await iniciarSesion(credentials.email, credentials.password);
+      setSesion({ usuario: u, necesitaSetup: false });
+      setCredentials({ email: '', password: '', nombre: '' });
+    } catch (error) {
+      setLoginError((error as Error).message);
+    } finally {
+      setEntrando(false);
+    }
+  };
+
+  // Si el perfil no alcanza para la pestaña abierta, se devuelve a pedidos
+  useEffect(() => {
+    if (!usuario) return;
+    const requiere: Record<string, Parameters<typeof puede>[1]> = {
+      products: 'catalogo',
+      analytics: 'ventas',
+      settings: 'ajustes',
+      usuarios: 'usuarios',
+    };
+    const p = requiere[activeTab];
+    if (p && !puede(usuario.rol, p)) setActiveTab('orders');
+  }, [usuario, activeTab]);
+
+  const handleLogout = async () => {
+    try {
+      await cerrarSesion();
+    } catch (e) {
+      console.error('Error al cerrar sesión:', e);
+    }
+    setSesion({ usuario: null, necesitaSetup: false });
+  };
+
+  // --- GESTIÓN DE USUARIOS (solo owner) ---
+  const cargarUsuarios = useCallback(async () => {
+    try {
+      setUsuarios(await fetchUsuarios());
+    } catch (e) {
+      console.error('Error cargando usuarios:', e);
+    }
+  }, []);
+
+  const handleGuardarUsuario = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (guardandoUsuario) return;
+    setGuardandoUsuario(true);
+    setErrorUsuario(null);
+    try {
+      if (usuarioForm.id) {
+        // Sin contraseña nueva, se conserva la que tenía
+        const { id, password, ...resto } = usuarioForm;
+        await actualizarUsuario(id, password ? { ...resto, password } : resto);
+      } else {
+        await crearUsuario(usuarioForm);
+      }
+      setUsuarioForm({ nombre: '', email: '', password: '', rol: 'ASESOR', activo: true });
+      await cargarUsuarios();
+    } catch (error) {
+      setErrorUsuario((error as Error).message);
+    } finally {
+      setGuardandoUsuario(false);
+    }
+  };
+
+  const handleEliminarUsuario = async (u: Usuario) => {
+    if (!confirm(`¿Eliminar el acceso de ${u.nombre}?`)) return;
+    try {
+      await eliminarUsuario(u.id);
+      await cargarUsuarios();
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  };
+
+  // --- ELIMINAR PEDIDO (solo owner) ---
+  const handleEliminarPedido = async (id: number, numero: string) => {
+    if (!confirm(`¿Eliminar el pedido ${numero}? Esta acción no se puede deshacer.`)) return;
+    try {
+      await eliminarPedido(id);
+      setSelectedOrder(null);
+      await Promise.all([cargarPedidos(), cargarProductos()]);
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
@@ -463,7 +591,18 @@ export default function AdminDashboard() {
   );
 
 
+  // Mientras no sepamos si hay sesión no se muestra ni el login ni el panel:
+  // así no parpadea la pantalla de acceso al recargar estando dentro.
+  if (sesion === null) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center font-sans">
+        <p className="text-neutral-500 text-xs font-bold uppercase tracking-widest">Cargando...</p>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
+    const esSetup = sesion.necesitaSetup;
     return (
       <div className="relative min-h-screen bg-black flex items-center justify-center p-4 font-sans overflow-hidden select-none">
         <div className="absolute inset-0 opacity-15 flex flex-col justify-between pointer-events-none rotate-[-6deg] scale-110">
@@ -479,8 +618,14 @@ export default function AdminDashboard() {
             <div className="inline-block bg-black px-6 py-3 rounded-lg mb-3 shadow-xl">
               <img src="/logo-wordmark.png" alt="OCEANPARK" className="h-14 w-auto object-contain brightness-0 invert" />
             </div>
-            <h1 className="text-xl font-black text-neutral-900 tracking-tight uppercase">Acceso Restringido</h1>
-            <p className="text-xs text-neutral-500 font-medium mt-1">Panel de Administración de Tienda</p>
+            <h1 className="text-xl font-black text-neutral-900 tracking-tight uppercase">
+              {esSetup ? 'Crea tu cuenta' : 'Acceso Restringido'}
+            </h1>
+            <p className="text-xs text-neutral-500 font-medium mt-1">
+              {esSetup
+                ? 'Esta tienda aún no tiene usuarios. El primero queda como owner.'
+                : 'Panel de Administración de Tienda'}
+            </p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-4 text-xs">
@@ -490,14 +635,28 @@ export default function AdminDashboard() {
               </div>
             )}
 
+            {esSetup && (
+              <div>
+                <label className="block font-bold text-neutral-800 uppercase mb-1">Tu nombre</label>
+                <input
+                  type="text"
+                  required
+                  value={credentials.nombre}
+                  onChange={(e) => setCredentials({ ...credentials, nombre: e.target.value })}
+                  placeholder="Ej. Stiven Caro"
+                  className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
+                />
+              </div>
+            )}
+
             <div>
-              <label className="block font-bold text-neutral-800 uppercase mb-1">Usuario</label>
+              <label className="block font-bold text-neutral-800 uppercase mb-1">Correo</label>
               <input
-                type="text"
+                type="email"
                 required
-                value={credentials.username}
-                onChange={(e) => setCredentials({ ...credentials, username: e.target.value })}
-                placeholder="Ingresa tu usuario"
+                value={credentials.email}
+                onChange={(e) => setCredentials({ ...credentials, email: e.target.value })}
+                placeholder="tucorreo@oceanpark.com"
                 className="w-full bg-white border border-neutral-300 text-neutral-900 text-sm rounded-xl p-3 outline-none focus:border-black font-semibold"
               />
             </div>
@@ -521,13 +680,17 @@ export default function AdminDashboard() {
                   {showPassword ? '👁️' : '🙈'}
                 </button>
               </div>
+              {esSetup && (
+                <p className="text-[10px] text-neutral-400 mt-1.5">Mínimo 8 caracteres.</p>
+              )}
             </div>
 
             <button
               type="submit"
-              className="w-full bg-black text-white font-bold py-3.5 rounded-xl uppercase tracking-wider hover:bg-neutral-800 transition-all shadow-lg text-xs mt-2"
+              disabled={entrando}
+              className="w-full bg-black text-white font-bold py-3.5 rounded-xl uppercase tracking-wider hover:bg-neutral-800 transition-all shadow-lg text-xs mt-2 disabled:bg-neutral-300"
             >
-              Entrar al Panel
+              {entrando ? 'Un momento...' : esSetup ? 'Crear cuenta y entrar' : 'Entrar al Panel'}
             </button>
           </form>
         </div>
@@ -555,6 +718,7 @@ export default function AdminDashboard() {
           >
             📋 Pedidos ({orders.length})
           </button>
+          {permiso('catalogo') && (
           <button
             onClick={() => setActiveTab('products')}
             className={`px-4 py-2 rounded-lg transition-all ${
@@ -563,6 +727,8 @@ export default function AdminDashboard() {
           >
             💄 Catálogo ({products.length})
           </button>
+          )}
+          {permiso('ventas') && (
           <button
             onClick={() => setActiveTab('analytics')}
             className={`px-4 py-2 rounded-lg transition-all ${
@@ -571,6 +737,8 @@ export default function AdminDashboard() {
           >
             📊 Ventas & Flujo
           </button>
+          )}
+          {permiso('ajustes') && (
           <button
             onClick={() => setActiveTab('settings')}
             className={`px-4 py-2 rounded-lg transition-all ${
@@ -579,6 +747,20 @@ export default function AdminDashboard() {
           >
             ⚙️ Datos de Pago
           </button>
+          )}
+          {permiso('usuarios') && (
+          <button
+            onClick={() => {
+              setActiveTab('usuarios');
+              cargarUsuarios();
+            }}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'usuarios' ? 'bg-white text-black shadow' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            👤 Usuarios
+          </button>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -588,8 +770,14 @@ export default function AdminDashboard() {
           >
             💬 + Venta Chat
           </button>
+          <div className="text-right hidden sm:block">
+            <span className="block text-xs font-bold text-white leading-tight">{usuario?.nombre}</span>
+            <span className="block text-[10px] text-neutral-400 uppercase tracking-wider">
+              {usuario ? ROLES[usuario.rol].label : ''}
+            </span>
+          </div>
           <button
-            onClick={() => setIsAuthenticated(false)}
+            onClick={handleLogout}
             className="text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-200 px-3 py-1.5 rounded-lg font-semibold transition-colors"
           >
             Salir
@@ -1124,6 +1312,199 @@ export default function AdminDashboard() {
                 </button>
               </form>
             )}
+          </div>
+        )}
+
+        {/* TAB 5: USUARIOS (solo owner) */}
+        {activeTab === 'usuarios' && permiso('usuarios') && (
+          <div className="space-y-6 max-w-4xl">
+            <div>
+              <h2 className="text-lg font-bold text-neutral-900">Usuarios del panel</h2>
+              <p className="text-xs text-neutral-500">
+                Cada persona entra con su propio correo. El perfil define qué puede hacer.
+              </p>
+            </div>
+
+            {/* Qué puede cada perfil */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {(Object.keys(ROLES) as Rol[]).map((r) => (
+                <div key={r} className="bg-white border border-neutral-200 rounded-xl p-4">
+                  <p className="font-bold text-neutral-900 uppercase text-xs">{ROLES[r].label}</p>
+                  <p className="text-[11px] text-neutral-500 mt-1 leading-relaxed">{ROLES[r].descripcion}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Alta y edición */}
+            <form onSubmit={handleGuardarUsuario} className="bg-white rounded-xl border border-neutral-200 p-5 space-y-4 text-xs">
+              <h3 className="font-bold text-neutral-900 uppercase">
+                {usuarioForm.id ? `Editar a ${usuarioForm.nombre}` : 'Crear usuario'}
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Nombre</label>
+                  <input
+                    type="text"
+                    required
+                    value={usuarioForm.nombre}
+                    onChange={(e) => setUsuarioForm({ ...usuarioForm, nombre: e.target.value })}
+                    placeholder="Ej. Laura Pérez"
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Correo</label>
+                  <input
+                    type="email"
+                    required
+                    value={usuarioForm.email}
+                    onChange={(e) => setUsuarioForm({ ...usuarioForm, email: e.target.value })}
+                    placeholder="laura@oceanpark.com"
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Perfil</label>
+                  <select
+                    value={usuarioForm.rol}
+                    onChange={(e) => setUsuarioForm({ ...usuarioForm, rol: e.target.value as Rol })}
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  >
+                    {(Object.keys(ROLES) as Rol[]).map((r) => (
+                      <option key={r} value={r}>{ROLES[r].label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                    Contraseña {usuarioForm.id && <span className="text-neutral-400">(déjala vacía para no cambiarla)</span>}
+                  </label>
+                  <input
+                    type="password"
+                    required={!usuarioForm.id}
+                    minLength={8}
+                    value={usuarioForm.password ?? ''}
+                    onChange={(e) => setUsuarioForm({ ...usuarioForm, password: e.target.value })}
+                    placeholder="Mínimo 8 caracteres"
+                    className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold text-neutral-900"
+                  />
+                </div>
+              </div>
+
+              {errorUsuario && (
+                <p className="bg-red-50 border border-red-200 text-red-700 text-[11px] font-semibold rounded-xl p-3">
+                  {errorUsuario}
+                </p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="submit"
+                  disabled={guardandoUsuario}
+                  className="bg-black hover:bg-neutral-800 text-white font-bold py-3 px-8 rounded-xl uppercase tracking-wider transition-all disabled:bg-neutral-300"
+                >
+                  {guardandoUsuario ? 'Guardando...' : usuarioForm.id ? 'Guardar cambios' : 'Crear usuario'}
+                </button>
+                {usuarioForm.id && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsuarioForm({ nombre: '', email: '', password: '', rol: 'ASESOR', activo: true });
+                      setErrorUsuario(null);
+                    }}
+                    className="bg-neutral-200 hover:bg-neutral-300 text-neutral-800 font-bold py-3 px-6 rounded-xl uppercase tracking-wider transition-all"
+                  >
+                    Cancelar
+                  </button>
+                )}
+              </div>
+            </form>
+
+            {/* Listado */}
+            <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-neutral-100 text-neutral-500 font-bold uppercase tracking-wider border-b border-neutral-200">
+                      <th className="p-4">Nombre</th>
+                      <th className="p-4">Correo</th>
+                      <th className="p-4">Perfil</th>
+                      <th className="p-4">Último acceso</th>
+                      <th className="p-4 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200 font-medium">
+                    {usuarios.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="text-center py-8 text-neutral-400">
+                          Cargando usuarios...
+                        </td>
+                      </tr>
+                    ) : (
+                      usuarios.map((u) => (
+                        <tr key={u.id} className="hover:bg-neutral-50 transition-colors">
+                          <td className="p-4 font-bold text-neutral-900">
+                            {u.nombre}
+                            {u.id === usuario?.id && (
+                              <span className="ml-2 text-[10px] bg-neutral-200 px-1.5 py-0.5 rounded font-bold">
+                                TÚ
+                              </span>
+                            )}
+                            {!u.activo && (
+                              <span className="ml-2 text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
+                                INACTIVO
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4 text-neutral-600">{u.email}</td>
+                          <td className="p-4">
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${
+                                u.rol === 'OWNER'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : u.rol === 'ADMINISTRADOR'
+                                    ? 'bg-sky-100 text-sky-800'
+                                    : 'bg-neutral-200 text-neutral-700'
+                              }`}
+                            >
+                              {ROLES[u.rol].label}
+                            </span>
+                          </td>
+                          <td className="p-4 text-neutral-500">
+                            {u.ultimoAcceso ? new Date(u.ultimoAcceso).toLocaleString('es-CO') : 'Nunca'}
+                          </td>
+                          <td className="p-4 text-center">
+                            <div className="flex justify-center gap-2">
+                              <button
+                                onClick={() => {
+                                  setUsuarioForm({
+                                    id: u.id, nombre: u.nombre, email: u.email,
+                                    password: '', rol: u.rol, activo: u.activo,
+                                  });
+                                  setErrorUsuario(null);
+                                }}
+                                className="bg-neutral-100 hover:bg-neutral-200 text-neutral-900 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                ✏️ Editar
+                              </button>
+                              {u.id !== usuario?.id && (
+                                <button
+                                  onClick={() => handleEliminarUsuario(u)}
+                                  className="bg-red-50 hover:bg-red-100 text-red-700 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                                >
+                                  🗑️
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1706,7 +2087,19 @@ export default function AdminDashboard() {
               )}
             </div>
 
-            <div className="mt-6 pt-3 border-t border-neutral-100 text-right">
+            <div className="mt-6 pt-3 border-t border-neutral-100 flex justify-between items-center gap-3">
+              {/* Eliminar un pedido repone inventario y borra su pago: por eso
+                  queda reservado al owner. */}
+              {permiso('eliminarPedidos') ? (
+                <button
+                  onClick={() => handleEliminarPedido(selectedOrder.id, selectedOrder.numero)}
+                  className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold px-4 py-2.5 rounded-xl uppercase tracking-wider text-[11px] transition-colors"
+                >
+                  🗑️ Eliminar pedido
+                </button>
+              ) : (
+                <span />
+              )}
               <button
                 onClick={() => setSelectedOrder(null)}
                 className="bg-black text-white font-bold px-5 py-2.5 rounded-xl uppercase tracking-wider text-xs"

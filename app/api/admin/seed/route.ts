@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
 import { CATEGORIES_PRINCIPALES, categoryLabel, getSubcategoriesForCategory } from '@/lib/menu';
+import { ErrorAuth, exigir } from '@/lib/auth';
 
 /**
  * Pobla categorias y subcategorias en MySQL a partir de lib/menu.ts.
@@ -22,6 +23,15 @@ export async function POST() {
       { success: false, error: 'No disponible en produccion' },
       { status: 403 }
     );
+  }
+
+  try {
+    await exigir('catalogo');
+  } catch (error) {
+    if (error instanceof ErrorAuth) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+    }
+    throw error;
   }
 
   const conn = await db.getConnection();

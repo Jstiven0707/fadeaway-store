@@ -298,3 +298,7 @@ export const BANDEJAS: Record<Bandeja, { label: string; icono: string; estados: 
 
 export const bandejaDe = (estado: EstadoOrden): Bandeja =>
   (Object.keys(BANDEJAS) as Bandeja[]).find((b) => BANDEJAS[b].estados.includes(estado)) ?? 'finalizados';
+
+/** Elimina un pedido. Solo el perfil owner tiene permiso. */
+export const eliminarPedido = (id: number) =>
+  pedir<null>(`/api/orders/${id}`, { method: 'DELETE' });
