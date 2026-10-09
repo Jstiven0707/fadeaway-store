@@ -10,6 +10,7 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
 import type { Presentacion, Product, ProductInput } from '@/lib/products';
+import { registrarMovimiento } from '@/lib/inventario-db';
 
 export const SELECT_PRODUCTO = `
   SELECT p.id, p.nombre, p.descripcion, p.precio, p.image_url, p.es_lanzamiento,
@@ -128,19 +129,72 @@ const idDeSubcategoria = async (conn: PoolConnection, href: string): Promise<num
   return filas[0].id;
 };
 
+/**
+ * Deja las presentaciones del producto como vienen del formulario.
+ *
+ * No se borran y se vuelven a crear, aunque seria mas corto: cada presentacion
+ * es la dueña de su historial de inventario, y borrarla se lo llevaria por
+ * delante. Por eso las que ya existen se conservan y las que desaparecen del
+ * formulario se marcan INACTIVO.
+ *
+ * Todo cambio de stock pasa por registrarMovimiento, nunca por un UPDATE
+ * suelto, para que el saldo y el historial no se separen.
+ */
 const guardarPresentaciones = async (
   conn: PoolConnection,
   idProducto: number,
-  presentations: Presentacion[]
+  presentations: Presentacion[],
+  idUsuario?: number | null
 ) => {
-  // Se reemplazan completas: es mas simple y confiable que calcular el diff.
-  // Ninguna otra tabla apunta a product_variants, asi que borrarlas es seguro.
-  await conn.query('DELETE FROM product_variants WHERE id_producto = ?', [idProducto]);
-  await conn.query(
-    `INSERT INTO product_variants (id_producto, presentacion, stock, estado_regis)
-     VALUES ${presentations.map(() => '(?, ?, ?, \'ACTIVO\')').join(', ')}`,
-    presentations.flatMap((p) => [idProducto, p.nombre, p.stock])
+  const [existentes] = await conn.query<RowDataPacket[]>(
+    'SELECT id, presentacion, stock, estado_regis FROM product_variants WHERE id_producto = ?',
+    [idProducto]
   );
+  const porNombre = new Map(existentes.map((v) => [String(v.presentacion), v]));
+  const enviadas = new Set(presentations.map((p) => p.nombre));
+
+  for (const pres of presentations) {
+    const previa = porNombre.get(pres.nombre);
+
+    if (!previa) {
+      const [res] = await conn.query<ResultSetHeader>(
+        `INSERT INTO product_variants (id_producto, presentacion, stock, estado_regis)
+         VALUES (?, ?, 0, 'ACTIVO')`,
+        [idProducto, pres.nombre]
+      );
+      if (pres.stock > 0) {
+        await registrarMovimiento(conn, {
+          idVariante: res.insertId,
+          tipo: 'ENTRADA',
+          cantidad: pres.stock,
+          motivo: 'Carga inicial',
+          idUsuario,
+        });
+      }
+      continue;
+    }
+
+    // Reaparecio una presentacion que se habia quitado: vuelve con su historial
+    if (previa.estado_regis !== 'ACTIVO') {
+      await conn.query(`UPDATE product_variants SET estado_regis = 'ACTIVO' WHERE id = ?`, [previa.id]);
+    }
+
+    if (Number(previa.stock) !== pres.stock) {
+      await registrarMovimiento(conn, {
+        idVariante: Number(previa.id),
+        tipo: 'AJUSTE',
+        cantidad: pres.stock,
+        motivo: 'Ajuste desde el catálogo',
+        idUsuario,
+      });
+    }
+  }
+
+  for (const v of existentes) {
+    if (!enviadas.has(String(v.presentacion)) && v.estado_regis === 'ACTIVO') {
+      await conn.query(`UPDATE product_variants SET estado_regis = 'INACTIVO' WHERE id = ?`, [v.id]);
+    }
+  }
 };
 
 export const obtenerProducto = async (id: number): Promise<Product | null> => {
@@ -148,7 +202,10 @@ export const obtenerProducto = async (id: number): Promise<Product | null> => {
   return filas.length ? filaAProducto(filas[0]) : null;
 };
 
-export const crearProducto = async (entrada: ProductInput): Promise<Product> => {
+export const crearProducto = async (
+  entrada: ProductInput,
+  idUsuario?: number | null
+): Promise<Product> => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -162,7 +219,7 @@ export const crearProducto = async (entrada: ProductInput): Promise<Product> => 
       [idSub, entrada.name, entrada.description, entrada.price, entrada.image || null, entrada.isNewRelease]
     );
 
-    await guardarPresentaciones(conn, res.insertId, entrada.presentations);
+    await guardarPresentaciones(conn, res.insertId, entrada.presentations, idUsuario);
     await conn.commit();
 
     const producto = await obtenerProducto(res.insertId);
@@ -178,7 +235,8 @@ export const crearProducto = async (entrada: ProductInput): Promise<Product> => 
 
 export const actualizarProducto = async (
   id: number,
-  entrada: ProductInput
+  entrada: ProductInput,
+  idUsuario?: number | null
 ): Promise<Product | null> => {
   const conn = await db.getConnection();
   try {
@@ -198,7 +256,7 @@ export const actualizarProducto = async (
       return null;
     }
 
-    await guardarPresentaciones(conn, id, entrada.presentations);
+    await guardarPresentaciones(conn, id, entrada.presentations, idUsuario);
     await conn.commit();
 
     return obtenerProducto(id);

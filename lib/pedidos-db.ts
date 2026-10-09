@@ -9,6 +9,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { db } from '@/lib/db';
+import { registrarMovimiento } from '@/lib/inventario-db';
 import {
   AjustesPago,
   CambioEstado,
@@ -260,6 +261,16 @@ export const crearPedidoDb = async (entrada: PedidoInput): Promise<Pedido> => {
       if (res.affectedRows === 0) {
         throw new ErrorPedido(`Se agotó ${d.nombreProducto} (${d.presentacion}) mientras comprabas`);
       }
+
+      // El UPDATE de arriba ya descontó; esto solo deja escrito el porqué
+      await registrarMovimiento(conn, {
+        idVariante: d.idVariante,
+        tipo: 'SALIDA',
+        cantidad: d.cantidad,
+        motivo: `Venta ${numero}`,
+        idOrden: orden.insertId,
+        yaAplicado: true,
+      });
     }
 
     await conn.query(
@@ -279,16 +290,31 @@ export const crearPedidoDb = async (entrada: PedidoInput): Promise<Pedido> => {
   }
 };
 
-/** Devuelve el inventario de un pedido cancelado. */
-const reponerStock = async (conn: PoolConnection, idOrden: number) => {
-  await conn.query(
-    `UPDATE product_variants v
-       INNER JOIN detalle_ordenes d
-          ON d.id_producto = v.id_producto AND d.presentacion = v.presentacion
-        SET v.stock = v.stock + d.cantidad
+/**
+ * Devuelve al inventario lo que llevaba un pedido que no prosperó.
+ *
+ * Va fila por fila, no en un UPDATE masivo, porque cada unidad que vuelve
+ * tiene que quedar escrita en el historial de inventario con su motivo.
+ */
+const reponerStock = async (conn: PoolConnection, idOrden: number, motivo: string) => {
+  const [filas] = await conn.query<RowDataPacket[]>(
+    `SELECT v.id AS id_variante, d.cantidad
+       FROM detalle_ordenes d
+       INNER JOIN product_variants v
+          ON v.id_producto = d.id_producto AND v.presentacion = d.presentacion
       WHERE d.id_orden = ?`,
     [idOrden]
   );
+
+  for (const f of filas) {
+    await registrarMovimiento(conn, {
+      idVariante: Number(f.id_variante),
+      tipo: 'ENTRADA',
+      cantidad: Number(f.cantidad),
+      motivo,
+      idOrden,
+    });
+  }
 };
 
 export const cambiarEstado = async (
@@ -329,7 +355,9 @@ export const cambiarEstado = async (
 
     await conn.query(`UPDATE ordenes SET estado = ?, token_resena = ? WHERE id = ?`, [nuevo, token, id]);
 
-    if (nuevo === 'CANCELADO') await reponerStock(conn, id);
+    if (nuevo === 'CANCELADO' || nuevo === 'DEVOLUCION') {
+      await reponerStock(conn, id, nuevo === 'CANCELADO' ? 'Pedido cancelado' : 'Devolución del cliente');
+    }
 
     // El pago queda registrado en el momento en que el dinero entra:
     //   - transferencia (Nequi/Daviplata): al confirmarla
@@ -338,6 +366,22 @@ export const cambiarEstado = async (
     const esMomentoDelPago =
       (nuevo === 'CONFIRMADO' && metodo !== 'CONTRAENTREGA') ||
       (nuevo === 'ENTREGADO' && metodo === 'CONTRAENTREGA');
+
+    if (nuevo === 'DEVOLUCION') {
+      const [cobrado] = await conn.query<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(monto), 0) AS neto FROM pagos
+          WHERE id_orden = ? AND estado_regis = 'ACTIVO'`,
+        [id]
+      );
+      const neto = Number(cobrado[0]?.neto ?? 0);
+      if (neto > 0) {
+        await conn.query(
+          `INSERT INTO pagos (id_orden, metodo, monto, referencia, nota)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, metodo, -neto, referenciaPago?.slice(0, 80) || null, `Reverso por devolución${nota ? ': ' + nota.slice(0, 200) : ''}`]
+        );
+      }
+    }
 
     if (esMomentoDelPago) {
       const [yaHay] = await conn.query<RowDataPacket[]>(
@@ -453,8 +497,9 @@ export const eliminarPedido = async (id: number): Promise<boolean> => {
     }
 
     const estado = filas[0].estado as EstadoOrden;
-    if (estado !== 'ENTREGADO' && estado !== 'CANCELADO') {
-      await reponerStock(conn, id);
+    // Si el pedido todavía tenía inventario reservado, se devuelve antes de borrar
+    if (estado !== 'ENTREGADO' && estado !== 'CANCELADO' && estado !== 'DEVOLUCION') {
+      await reponerStock(conn, id, 'Pedido eliminado');
     }
 
     await conn.query(`UPDATE pagos SET estado_regis = 'INACTIVO' WHERE id_orden = ?`, [id]);

@@ -68,8 +68,9 @@ export async function GET(request: Request) {
 /** POST /api/products — crea un producto con sus presentaciones. */
 export async function POST(request: Request) {
   let entrada;
+  let yo;
   try {
-    await exigir('catalogo');
+    yo = await exigir('catalogo');
     entrada = leerEntrada(await request.json());
   } catch (error) {
     if (error instanceof ErrorAuth) {
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const producto = await crearProducto(entrada);
+    const producto = await crearProducto(entrada, yo.id);
     return NextResponse.json({ success: true, data: producto }, { status: 201 });
   } catch (error) {
     const mensaje = (error as Error).message;

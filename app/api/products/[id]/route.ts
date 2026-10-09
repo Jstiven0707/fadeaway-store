@@ -37,8 +37,9 @@ export async function PUT(request: Request, ctx: Contexto) {
   if (!id) return NextResponse.json({ success: false, error: 'Id invalido' }, { status: 400 });
 
   let entrada;
+  let yo;
   try {
-    await exigir('catalogo');
+    yo = await exigir('catalogo');
     entrada = leerEntrada(await request.json());
   } catch (error) {
     if (error instanceof ErrorAuth) {
@@ -48,7 +49,7 @@ export async function PUT(request: Request, ctx: Contexto) {
   }
 
   try {
-    const producto = await actualizarProducto(id, entrada);
+    const producto = await actualizarProducto(id, entrada, yo.id);
     if (!producto) {
       return NextResponse.json({ success: false, error: 'Producto no encontrado' }, { status: 404 });
     }

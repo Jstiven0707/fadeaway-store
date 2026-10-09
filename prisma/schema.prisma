@@ -71,6 +71,7 @@ model ProductVariant {
   estadoRegis  EstadoRegis  @default(ACTIVO) @map("estado_regis")
 
   producto     Producto     @relation(fields: [idProducto], references: [id], onDelete: Cascade)
+  movimientos  MovimientoInventario[]
 
   @@map("product_variants")
 }
@@ -248,6 +249,7 @@ enum EstadoOrden {
   ENVIADO
   ENTREGADO
   CANCELADO
+  DEVOLUCION
 }
 
 enum MetodoPago {
@@ -262,4 +264,36 @@ enum CanalVenta {
   Facebook
   Instagram
   Directo
+}
+
+/// Cada entrada o salida de inventario queda escrita aqui. El stock de la
+/// variante es el saldo; esta tabla es el porque de ese saldo.
+model MovimientoInventario {
+  id          Int             @id @default(autoincrement())
+  idVariante  Int             @map("id_variante")
+  tipo        TipoMovimiento
+  /// Siempre positiva: el signo lo da el tipo
+  cantidad    Int
+  /// Stock que quedo despues del movimiento, para auditar sin recalcular
+  saldo       Int
+  motivo      String          @db.VarChar(120)
+  /// Pedido que lo origino, cuando aplica
+  idOrden     Int?            @map("id_orden")
+  /// Quien lo hizo; null cuando lo genero una compra del cliente
+  idUsuario   Int?            @map("id_usuario")
+  fechaHora   DateTime        @default(now()) @map("fecha_hora")
+
+  variante    ProductVariant  @relation(fields: [idVariante], references: [id], onDelete: Cascade)
+
+  @@index([idVariante, fechaHora])
+  @@map("movimientos_inventario")
+}
+
+enum TipoMovimiento {
+  /// Suma: carga inicial, reposicion, devolucion de un pedido
+  ENTRADA
+  /// Resta: venta
+  SALIDA
+  /// Correccion manual tras un conteo fisico
+  AJUSTE
 }

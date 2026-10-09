@@ -10,6 +10,8 @@ import {
 import {
   AjustesPago,
   BANDEJAS,
+  ORDEN_ESTADOS,
+  bandejaDe,
   Bandeja,
   ESTADOS,
   PERIODOS,
@@ -28,6 +30,18 @@ import {
   guardarAjustes,
   rangoDe,
 } from '@/lib/pedidos';
+import {
+  TIPOS_MOVIMIENTO,
+  UMBRAL_BAJO,
+  fetchInventario,
+  fetchMovimientos,
+  moverStock,
+  nivelDe,
+  type FilaInventario,
+  type MovimientoInventario,
+  type ResumenInventario,
+  type TipoMovimiento,
+} from '@/lib/inventario';
 import {
   EstadoSesion,
   ROLES,
@@ -89,7 +103,22 @@ export default function AdminDashboard() {
   const [errorMiClave, setErrorMiClave] = useState<string | null>(null);
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
   const [errorUsuario, setErrorUsuario] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'analytics' | 'settings' | 'usuarios'>('orders');
+  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'inventario' | 'analytics' | 'settings' | 'usuarios'>('orders');
+
+  // 1b. INVENTARIO
+  const [inventario, setInventario] = useState<FilaInventario[]>([]);
+  const [resumenInv, setResumenInv] = useState<ResumenInventario | null>(null);
+  const [buscarInv, setBuscarInv] = useState('');
+  const [soloBajos, setSoloBajos] = useState(false);
+  const [cargandoInv, setCargandoInv] = useState(false);
+  const [errorInv, setErrorInv] = useState<string | null>(null);
+  /** Presentación abierta en el panel de movimientos */
+  const [verMovimientos, setVerMovimientos] = useState<FilaInventario | null>(null);
+  const [movimientos, setMovimientos] = useState<MovimientoInventario[]>([]);
+  const [formMov, setFormMov] = useState<{ tipo: TipoMovimiento; cantidad: string; motivo: string }>({
+    tipo: 'ENTRADA', cantidad: '', motivo: '',
+  });
+  const [guardandoMov, setGuardandoMov] = useState(false);
 
   // 2. ESTADOS DE PEDIDOS Y PRODUCTOS
   const [orders, setOrders] = useState<Pedido[]>([]);
@@ -258,6 +287,69 @@ export default function AdminDashboard() {
     const p = requiere[activeTab];
     if (p && !puede(usuario.rol, p)) setActiveTab('orders');
   }, [usuario, activeTab]);
+
+  const cargarInventario = useCallback(async () => {
+    setCargandoInv(true);
+    setErrorInv(null);
+    try {
+      const { filas, resumen } = await fetchInventario({
+        buscar: buscarInv.trim() || undefined,
+        soloBajos,
+      });
+      setInventario(filas);
+      setResumenInv(resumen);
+    } catch (error) {
+      setErrorInv((error as Error).message);
+    } finally {
+      setCargandoInv(false);
+    }
+  }, [buscarInv, soloBajos]);
+
+  // El inventario se recarga solo al cambiar la búsqueda o el filtro, con una
+  // pausa corta para no consultar en cada tecla.
+  useEffect(() => {
+    if (activeTab !== 'inventario') return;
+    const t = setTimeout(cargarInventario, 300);
+    return () => clearTimeout(t);
+  }, [activeTab, cargarInventario]);
+
+  const abrirMovimientos = async (fila: FilaInventario) => {
+    setVerMovimientos(fila);
+    setMovimientos([]);
+    setFormMov({ tipo: 'ENTRADA', cantidad: '', motivo: '' });
+    try {
+      setMovimientos(await fetchMovimientos(fila.idVariante));
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  };
+
+  const handleMovimiento = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verMovimientos || guardandoMov) return;
+
+    setGuardandoMov(true);
+    try {
+      const { stock } = await moverStock({
+        idVariante: verMovimientos.idVariante,
+        tipo: formMov.tipo,
+        cantidad: Number(formMov.cantidad),
+        motivo: formMov.motivo,
+      });
+      // Se refresca el saldo en pantalla sin esperar a recargar toda la tabla
+      setVerMovimientos({ ...verMovimientos, stock });
+      setInventario((prev) =>
+        prev.map((f) => (f.idVariante === verMovimientos.idVariante ? { ...f, stock } : f))
+      );
+      setMovimientos(await fetchMovimientos(verMovimientos.idVariante));
+      setFormMov({ tipo: 'ENTRADA', cantidad: '', motivo: '' });
+      cargarInventario();
+    } catch (error) {
+      alert((error as Error).message);
+    } finally {
+      setGuardandoMov(false);
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -631,9 +723,10 @@ export default function AdminDashboard() {
   // Un pedido entregado o cancelado sale de las bandejas de trabajo:
   // ya no hay nada que hacerle, solo queda como historial.
   const pedidosDeBandeja = orders.filter((o) => BANDEJAS[bandeja].estados.includes(o.estado));
-  const filteredOrders = pedidosDeBandeja.filter(
-    (order) => filterStatus === 'TODOS' || order.estado === filterStatus
-  );
+  const filteredOrders =
+    filterStatus === 'TODOS'
+      ? pedidosDeBandeja
+      : orders.filter((o) => o.estado === filterStatus);
 
 
   // Mientras no sepamos si hay sesión no se muestra ni el login ni el panel:
@@ -811,6 +904,19 @@ export default function AdminDashboard() {
             💄 Catálogo ({products.length})
           </button>
           )}
+          <button
+            onClick={() => setActiveTab('inventario')}
+            className={`px-4 py-2 rounded-lg transition-all ${
+              activeTab === 'inventario' ? 'bg-white text-black shadow' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            📦 Inventario
+            {resumenInv && resumenInv.agotadas + resumenInv.bajas > 0 && (
+              <span className="ml-1.5 bg-amber-400 text-black rounded-full px-1.5 text-[10px]">
+                {resumenInv.agotadas + resumenInv.bajas}
+              </span>
+            )}
+          </button>
           {permiso('ventas') && (
           <button
             onClick={() => setActiveTab('analytics')}
@@ -918,19 +1024,33 @@ export default function AdminDashboard() {
                     : 'Pedidos cerrados. Solo quedan como historial.'}
               </p>
               <div className="flex gap-2 text-xs font-semibold overflow-x-auto pb-1">
-                {(['TODOS', ...BANDEJAS[bandeja].estados] as const).map((estado) => {
+                {(['TODOS', ...ORDEN_ESTADOS] as const).map((estado) => {
                   const cuantos =
                     estado === 'TODOS'
                       ? pedidosDeBandeja.length
-                      : pedidosDeBandeja.filter((o) => o.estado === estado).length;
+                      : orders.filter((o) => o.estado === estado).length;
+                  // Los estados que no son de esta bandeja se ven mas apagados,
+                  // pero se pueden pulsar: la bandeja se mueve sola.
+                  const deEstaBandeja =
+                    estado === 'TODOS' || BANDEJAS[bandeja].estados.includes(estado);
                   return (
                     <button
                       key={estado}
-                      onClick={() => setFilterStatus(estado)}
+                      onClick={() => {
+                        setFilterStatus(estado);
+                        if (estado !== 'TODOS') setBandeja(bandejaDe(estado));
+                      }}
+                      title={
+                        deEstaBandeja
+                          ? undefined
+                          : `Está en ${BANDEJAS[bandejaDe(estado)].label}: al pulsarlo te lleva allá`
+                      }
                       className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
                         filterStatus === estado
                           ? 'bg-neutral-900 text-white font-bold'
-                          : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                          : deEstaBandeja
+                            ? 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                            : 'bg-neutral-50 text-neutral-400 hover:bg-neutral-200 hover:text-neutral-600'
                       }`}
                     >
                       {estado === 'TODOS' ? 'Todos' : ESTADOS[estado].label} ({cuantos})
@@ -1158,6 +1278,267 @@ export default function AdminDashboard() {
         )}
 
         {/* TAB 3: ANALYTICS */}
+        {/* ====================== INVENTARIO ====================== */}
+        {activeTab === 'inventario' && (
+          <div className="p-6 max-w-7xl mx-auto space-y-5">
+            <div>
+              <h2 className="text-xl font-black uppercase tracking-tight">Inventario</h2>
+              <p className="text-[11px] text-neutral-500 mt-1">
+                El stock baja solo cuando un cliente compra, y vuelve a subir si el pedido se
+                cancela o se devuelve. Aquí ves el saldo de cada presentación y de dónde salió.
+              </p>
+            </div>
+
+            {/* Tarjetas de resumen */}
+            {resumenInv && (
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+                {[
+                  { t: 'Presentaciones', v: String(resumenInv.presentaciones), s: 'activas en catálogo', c: 'text-neutral-900' },
+                  { t: 'Unidades', v: String(resumenInv.unidades), s: 'disponibles en total', c: 'text-neutral-900' },
+                  { t: 'Valorizado', v: formatCOP(resumenInv.valorizado), s: 'a precio de venta', c: 'text-neutral-900' },
+                  { t: 'Quedan pocas', v: String(resumenInv.bajas), s: `${resumenInv.umbral} o menos`, c: 'text-amber-700' },
+                  { t: 'Agotadas', v: String(resumenInv.agotadas), s: 'sin una sola unidad', c: 'text-red-700' },
+                ].map((k) => (
+                  <div key={k.t} className="bg-white rounded-xl border border-neutral-200 p-4">
+                    <p className="text-[10px] font-bold uppercase text-neutral-500">{k.t}</p>
+                    <p className={`text-xl font-black mt-1 ${k.c}`}>{k.v}</p>
+                    <p className="text-[10px] text-neutral-400 mt-0.5">{k.s}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Filtros */}
+            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+              <input
+                value={buscarInv}
+                onChange={(e) => setBuscarInv(e.target.value)}
+                placeholder="Buscar por producto o presentación..."
+                className="flex-1 bg-white border border-neutral-300 rounded-xl p-3 text-xs outline-none focus:border-black font-semibold"
+              />
+              <button
+                onClick={() => setSoloBajos(!soloBajos)}
+                className={`px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors whitespace-nowrap ${
+                  soloBajos
+                    ? 'bg-amber-400 text-black'
+                    : 'bg-white border border-neutral-300 text-neutral-600 hover:bg-neutral-100'
+                }`}
+              >
+                Solo lo que se está acabando
+              </button>
+            </div>
+
+            {/* Tabla */}
+            <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-neutral-100 text-neutral-500 font-bold uppercase tracking-wider border-b border-neutral-200">
+                      <th className="p-4">Producto</th>
+                      <th className="p-4">Presentación</th>
+                      <th className="p-4 text-center">Disponible</th>
+                      <th className="p-4 text-center">Vendidas</th>
+                      <th className="p-4">Valorizado</th>
+                      <th className="p-4">Último movimiento</th>
+                      <th className="p-4 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-200 font-medium">
+                    {inventario.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center py-8 text-neutral-400">
+                          {cargandoInv
+                            ? 'Cargando inventario...'
+                            : errorInv
+                              ? errorInv
+                              : soloBajos
+                                ? 'Nada se está acabando. Todo en orden.'
+                                : 'Todavía no hay productos en el catálogo.'}
+                        </td>
+                      </tr>
+                    ) : (
+                      inventario.map((f) => {
+                        const nivel = nivelDe(f.stock, resumenInv?.umbral ?? UMBRAL_BAJO);
+                        return (
+                          <tr key={f.idVariante} className="hover:bg-neutral-50 transition-colors">
+                            <td className="p-4">
+                              <p className="font-bold text-neutral-900">{f.producto}</p>
+                              <p className="text-[10px] text-neutral-400">
+                                {f.categoria} · {f.subcategoria}
+                              </p>
+                            </td>
+                            <td className="p-4 font-semibold">{f.presentacion}</td>
+                            <td className="p-4 text-center">
+                              <span className={`px-2.5 py-1 rounded-full border text-[11px] font-bold ${nivel.color}`}>
+                                {f.stock} · {nivel.label}
+                              </span>
+                            </td>
+                            <td className="p-4 text-center text-neutral-600">{f.vendidas}</td>
+                            <td className="p-4 text-neutral-600">{formatCOP(f.stock * f.precio)}</td>
+                            <td className="p-4 text-[11px] text-neutral-500">
+                              {f.ultimoMovimiento
+                                ? new Date(f.ultimoMovimiento).toLocaleString('es-CO', {
+                                    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+                                  })
+                                : 'Sin movimientos'}
+                            </td>
+                            <td className="p-4 text-center">
+                              <button
+                                onClick={() => abrirMovimientos(f)}
+                                className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                {permiso('catalogo') ? 'Mover / Historial' : 'Ver historial'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Panel lateral de una presentación: su historial y, si el perfil
+            alcanza, el formulario para corregir el saldo. */}
+        {verMovimientos && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex justify-end"
+            onClick={() => setVerMovimientos(null)}
+          >
+            <div
+              className="bg-[#F4F4F6] w-full max-w-lg h-full overflow-y-auto shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="bg-black text-white p-5 sticky top-0 z-10">
+                <div className="flex justify-between items-start gap-4">
+                  <div>
+                    <p className="font-black uppercase text-sm">{verMovimientos.producto}</p>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Presentación {verMovimientos.presentacion}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setVerMovimientos(null)}
+                    className="text-neutral-400 hover:text-white text-xl leading-none"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <p className="mt-3 text-2xl font-black">
+                  {verMovimientos.stock}
+                  <span className="text-xs font-bold text-neutral-400 ml-2 uppercase">disponibles</span>
+                </p>
+              </div>
+
+              <div className="p-5 space-y-5">
+                {permiso('catalogo') && (
+                  <form onSubmit={handleMovimiento} className="bg-white rounded-xl border border-neutral-200 p-5 space-y-3 text-xs">
+                    <p className="font-bold uppercase text-neutral-900">Registrar movimiento</p>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {(Object.keys(TIPOS_MOVIMIENTO) as TipoMovimiento[]).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setFormMov({ ...formMov, tipo: t })}
+                          className={`py-2 rounded-lg font-bold transition-colors border ${
+                            formMov.tipo === t
+                              ? 'bg-neutral-900 text-white border-neutral-900'
+                              : 'bg-white text-neutral-600 border-neutral-300 hover:bg-neutral-100'
+                          }`}
+                        >
+                          {TIPOS_MOVIMIENTO[t].signo} {TIPOS_MOVIMIENTO[t].label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-neutral-500 leading-relaxed">
+                      {TIPOS_MOVIMIENTO[formMov.tipo].ayuda}
+                    </p>
+
+                    <div>
+                      <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">
+                        {formMov.tipo === 'AJUSTE' ? 'Unidades que contaste' : 'Cantidad'}
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        required
+                        value={formMov.cantidad}
+                        onChange={(e) => setFormMov({ ...formMov, cantidad: e.target.value })}
+                        className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold"
+                      />
+                      {formMov.tipo === 'AJUSTE' && (
+                        <p className="text-[10px] text-neutral-400 mt-1">
+                          Escribe el total real que contaste. El sistema calcula solo la diferencia.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-neutral-700 uppercase mb-1 text-[11px]">Motivo</label>
+                      <input
+                        required
+                        value={formMov.motivo}
+                        onChange={(e) => setFormMov({ ...formMov, motivo: e.target.value })}
+                        placeholder="Ej: llegó pedido del proveedor"
+                        className="w-full bg-white border border-neutral-300 rounded-xl p-3 outline-none focus:border-black font-semibold"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={guardandoMov}
+                      className="w-full bg-black hover:bg-neutral-800 text-white font-bold py-3 rounded-xl uppercase tracking-wider transition-all disabled:bg-neutral-300"
+                    >
+                      {guardandoMov ? 'Guardando...' : 'Guardar movimiento'}
+                    </button>
+                  </form>
+                )}
+
+                <div className="bg-white rounded-xl border border-neutral-200 overflow-hidden">
+                  <p className="font-bold uppercase text-neutral-900 text-xs p-4 border-b border-neutral-200">
+                    Historial
+                  </p>
+                  {movimientos.length === 0 ? (
+                    <p className="text-[11px] text-neutral-400 p-5 text-center">
+                      Esta presentación todavía no tiene movimientos.
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-neutral-100 text-xs">
+                      {movimientos.map((m) => (
+                        <li key={m.id} className="p-4 flex justify-between items-start gap-3">
+                          <div className="min-w-0">
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded border text-[10px] font-bold ${TIPOS_MOVIMIENTO[m.tipo].color}`}
+                            >
+                              {TIPOS_MOVIMIENTO[m.tipo].signo} {m.cantidad}
+                            </span>
+                            <p className="font-semibold text-neutral-800 mt-1 truncate">{m.motivo}</p>
+                            <p className="text-[10px] text-neutral-400 mt-0.5">
+                              {new Date(m.fechaHora).toLocaleString('es-CO', {
+                                day: '2-digit', month: 'short', year: 'numeric',
+                                hour: '2-digit', minute: '2-digit',
+                              })}
+                              {m.usuario ? ` · ${m.usuario}` : ''}
+                              {m.numeroPedido ? ` · ${m.numeroPedido}` : ''}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-black text-neutral-900">{m.saldo}</p>
+                            <p className="text-[10px] text-neutral-400">quedaron</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
 
@@ -1605,7 +1986,7 @@ export default function AdminDashboard() {
                   <thead>
                     <tr className="bg-neutral-100 text-neutral-500 font-bold uppercase tracking-wider border-b border-neutral-200">
                       <th className="p-4">Nombre</th>
-                      <th className="p-4">Usuario</th>
+                      <th className="p-4">Usuario</th>
                       <th className="p-4">Correo</th>
                       <th className="p-4">Perfil</th>
                       <th className="p-4">Último acceso</th>
@@ -1635,7 +2016,7 @@ export default function AdminDashboard() {
                               </span>
                             )}
                           </td>
-                          <td className="p-4 font-semibold text-neutral-700">{u.usuario}</td>
+                          <td className="p-4 font-semibold text-neutral-700">{u.usuario}</td>
                           <td className="p-4 text-neutral-600">{u.email}</td>
                           <td className="p-4">
                             <span

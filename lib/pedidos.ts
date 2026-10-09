@@ -10,7 +10,8 @@ export type EstadoOrden =
   | 'ALISTADO'
   | 'ENVIADO'
   | 'ENTREGADO'
-  | 'CANCELADO';
+  | 'CANCELADO'
+  | 'DEVOLUCION';
 
 export type MetodoPago = 'NEQUI' | 'DAVIPLATA' | 'CONTRAENTREGA';
 export type CanalVenta = 'Web' | 'WhatsApp' | 'Facebook' | 'Instagram' | 'Directo';
@@ -70,12 +71,18 @@ export const ESTADOS: Record<EstadoOrden, DefinicionEstado> = {
     label: 'Entregado',
     etapa: 'Cerrado',
     color: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-    siguientes: ['CANCELADO'],
+    siguientes: ['DEVOLUCION'],
   },
   CANCELADO: {
-    label: 'Cancelado / Devolución',
+    label: 'Cancelado',
     etapa: 'Cerrado',
     color: 'bg-red-100 text-red-700 border-red-200',
+    siguientes: [],
+  },
+  DEVOLUCION: {
+    label: 'Devolución',
+    etapa: 'Cerrado',
+    color: 'bg-orange-100 text-orange-800 border-orange-200',
     siguientes: [],
   },
 };
@@ -89,6 +96,7 @@ export const ORDEN_ESTADOS: EstadoOrden[] = [
   'ENVIADO',
   'ENTREGADO',
   'CANCELADO',
+  'DEVOLUCION',
 ];
 
 export const METODOS_PAGO: Record<MetodoPago, { label: string; desc: string; anticipado: boolean }> = {
@@ -292,7 +300,7 @@ export const BANDEJAS: Record<Bandeja, { label: string; icono: string; estados: 
   finalizados: {
     label: 'Finalizados',
     icono: '✓',
-    estados: ['ENTREGADO', 'CANCELADO'],
+    estados: ['ENTREGADO', 'CANCELADO', 'DEVOLUCION'],
   },
 };
 
