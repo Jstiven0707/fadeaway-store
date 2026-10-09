@@ -233,6 +233,18 @@ export const resumenInventario = async (umbral = 5) => {
     [umbral]
   );
 
+  // Un contador de "quedan pocas" no sirve de nada si no dice de que, asi
+  // que el resumen trae tambien los nombres, que es lo accionable.
+  const [criticas] = await db.query<RowDataPacket[]>(
+    `SELECT p.nombre AS producto, v.presentacion, v.stock
+       FROM product_variants v
+       INNER JOIN productos p ON p.id = v.id_producto
+      WHERE v.estado_regis = 'ACTIVO' AND p.estado_regis = 'ACTIVO' AND v.stock <= ?
+      ORDER BY v.stock ASC, p.nombre ASC
+      LIMIT 12`,
+    [umbral]
+  );
+
   const f = filas[0] ?? {};
   return {
     presentaciones: Number(f.presentaciones ?? 0),
@@ -240,6 +252,11 @@ export const resumenInventario = async (umbral = 5) => {
     valorizado: Number(f.valorizado ?? 0),
     agotadas: Number(f.agotadas ?? 0),
     bajas: Number(f.bajas ?? 0),
+    criticas: criticas.map((c) => ({
+      producto: c.producto as string,
+      presentacion: c.presentacion as string,
+      stock: Number(c.stock),
+    })),
     umbral,
   };
 };

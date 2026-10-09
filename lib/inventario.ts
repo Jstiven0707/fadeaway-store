@@ -66,6 +66,8 @@ export interface ResumenInventario {
   valorizado: number;
   agotadas: number;
   bajas: number;
+  /** Las que están en cero o por debajo del umbral, con nombre y saldo */
+  criticas: Array<{ producto: string; presentacion: string; stock: number }>;
   umbral: number;
 }
 

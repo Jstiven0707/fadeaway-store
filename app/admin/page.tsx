@@ -914,9 +914,12 @@ export default function AdminDashboard() {
             }`}
           >
             📦 Inventario
-            {resumenInv && resumenInv.agotadas + resumenInv.bajas > 0 && (
-              <span className="ml-1.5 bg-amber-400 text-black rounded-full px-1.5 text-[10px]">
-                {resumenInv.agotadas + resumenInv.bajas}
+            {resumenInv && resumenInv.criticas.length > 0 && (
+              <span
+                title="Hay presentaciones agotadas o por acabarse"
+                className="ml-1.5 bg-amber-400 text-black rounded-full px-1.5 text-[10px]"
+              >
+                {resumenInv.criticas.length}
               </span>
             )}
           </button>
@@ -1308,28 +1311,59 @@ export default function AdminDashboard() {
           <div className="p-6 max-w-7xl mx-auto space-y-5">
             <div>
               <h2 className="text-xl font-black uppercase tracking-tight">Inventario</h2>
-              <p className="text-[11px] text-neutral-500 mt-1">
+              <p className="text-[11px] text-neutral-500 mt-1 max-w-3xl leading-relaxed">
                 El stock baja solo cuando un cliente compra, y vuelve a subir si el pedido se
-                cancela o se devuelve. Aquí ves el saldo de cada presentación y de dónde salió.
+                cancela o se devuelve. Usa <strong>Corregir stock</strong> cuando el sistema no
+                se pueda enterar por su cuenta: te llegó mercancía del proveedor, se dañó algo,
+                o contaste físico y no cuadraba. Ahí mismo queda el historial de esa
+                presentación, con el motivo de cada movimiento.
               </p>
             </div>
 
-            {/* Tarjetas de resumen */}
+            {/* Tres números que sí se leen solos. Los de "quedan pocas" y
+                "agotadas" no van aquí: un contador sin nombres no dice qué
+                hay que reponer, y eso vive en el aviso de abajo. */}
             {resumenInv && (
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                 {[
-                  { t: 'Presentaciones', v: String(resumenInv.presentaciones), s: 'activas en catálogo', c: 'text-neutral-900' },
-                  { t: 'Unidades', v: String(resumenInv.unidades), s: 'disponibles en total', c: 'text-neutral-900' },
-                  { t: 'Valorizado', v: formatCOP(resumenInv.valorizado), s: 'a precio de venta', c: 'text-neutral-900' },
-                  { t: 'Quedan pocas', v: String(resumenInv.bajas), s: `${resumenInv.umbral} o menos`, c: 'text-amber-700' },
-                  { t: 'Agotadas', v: String(resumenInv.agotadas), s: 'sin una sola unidad', c: 'text-red-700' },
+                  { t: 'Presentaciones', v: String(resumenInv.presentaciones), s: 'activas en el catálogo' },
+                  { t: 'Unidades', v: String(resumenInv.unidades), s: 'disponibles para vender' },
+                  { t: 'Valorizado', v: formatCOP(resumenInv.valorizado), s: 'si lo vendieras todo' },
                 ].map((k) => (
                   <div key={k.t} className="bg-white rounded-xl border border-neutral-200 p-4">
                     <p className="text-[10px] font-bold uppercase text-neutral-500">{k.t}</p>
-                    <p className={`text-xl font-black mt-1 ${k.c}`}>{k.v}</p>
+                    <p className="text-xl font-black mt-1 text-neutral-900">{k.v}</p>
                     <p className="text-[10px] text-neutral-400 mt-0.5">{k.s}</p>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Lo que hay que reponer, con nombre y apellido */}
+            {resumenInv && resumenInv.criticas.length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-[11px] font-black uppercase tracking-wider text-amber-900">
+                  Hay que reponer
+                </p>
+                <div className="flex flex-wrap gap-2 mt-2.5">
+                  {resumenInv.criticas.map((c) => (
+                    <button
+                      key={`${c.producto}-${c.presentacion}`}
+                      onClick={() => { setBuscarInv(c.producto); setSoloBajos(false); }}
+                      title="Buscar este producto en la lista"
+                      className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-colors ${
+                        c.stock === 0
+                          ? 'bg-red-100 text-red-800 border-red-200 hover:bg-red-200'
+                          : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-100'
+                      }`}
+                    >
+                      {c.producto} · {c.presentacion}
+                      <span className="ml-1.5 font-black">
+                        {c.stock === 0 ? 'agotado' : `quedan ${c.stock}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1412,7 +1446,7 @@ export default function AdminDashboard() {
                                 onClick={() => abrirMovimientos(f)}
                                 className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
                               >
-                                {permiso('catalogo') ? 'Mover / Historial' : 'Ver historial'}
+                                {permiso('catalogo') ? 'Corregir stock' : 'Ver movimientos'}
                               </button>
                             </td>
                           </tr>
