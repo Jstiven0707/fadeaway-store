@@ -14,6 +14,9 @@ import {
   bandejaDe,
   Bandeja,
   ESTADOS,
+  ESTADOS_PAGO,
+  estadoPagoDe,
+  siguientesDe,
   PERIODOS,
   Pago,
   Periodo,
@@ -1018,7 +1021,7 @@ export default function AdminDashboard() {
             <div className="mb-4">
               <p className="text-[11px] text-neutral-500 mb-2">
                 {bandeja === 'pagos'
-                  ? 'Aquí solo se valida el dinero. Cuando confirmes el pago, el pedido pasa a Logística.'
+                  ? 'Aquí se resuelve el dinero. Las transferencias esperan el comprobante; los contraentrega pasan directo a alistar y se cobran al entregar.'
                   : bandeja === 'logistica'
                     ? 'Alistamiento y despacho. Al marcar Entregado el pedido sale de esta bandeja.'
                     : 'Pedidos cerrados. Solo quedan como historial.'}
@@ -1111,7 +1114,18 @@ export default function AdminDashboard() {
                           <td className="p-4 font-semibold">
                             {order.nombre} {order.apellido}
                             <span className="block text-[10px] text-neutral-400 font-medium">
-                              {METODOS_PAGO[order.metodoPago].label}
+                              {METODOS_PAGO[order.metodoPago].label} ·{' '}
+                              <span
+                                className={
+                                  estadoPagoDe(order) === 'PAGADO'
+                                    ? 'text-emerald-600 font-bold'
+                                    : estadoPagoDe(order) === 'SE_COBRA_AL_ENTREGAR'
+                                      ? 'text-sky-600 font-bold'
+                                      : 'text-amber-600 font-bold'
+                                }
+                              >
+                                {ESTADOS_PAGO[estadoPagoDe(order)].corto}
+                              </span>
                             </span>
                           </td>
                           <td className="p-4 text-neutral-600">{order.ciudad}</td>
@@ -2581,6 +2595,23 @@ export default function AdminDashboard() {
                   </span>
                 </div>
 
+                {/* Cómo va el dinero de este pedido. Es lo primero que hay que
+                    mirar antes de alistarlo, y cambia según el método. */}
+                {(() => {
+                  const ep = estadoPagoDe(selectedOrder);
+                  return (
+                    <div className={`mb-3 rounded-xl border p-3 ${ESTADOS_PAGO[ep].color}`}>
+                      <p className="text-[10px] font-black uppercase tracking-widest">
+                        Pago · {METODOS_PAGO[selectedOrder.metodoPago].label}
+                      </p>
+                      <p className="text-sm font-black mt-0.5">{ESTADOS_PAGO[ep].label}</p>
+                      <p className="text-[10px] font-semibold mt-1 leading-relaxed opacity-80">
+                        {ESTADOS_PAGO[ep].ayuda}
+                      </p>
+                    </div>
+                  );
+                })()}
+
                 {/* Al confirmar una transferencia se puede anotar el número de la
                     transacción, que queda guardado junto al pago. */}
                 {selectedOrder.estado === 'PENDIENTE_PAGO' &&
@@ -2599,20 +2630,32 @@ export default function AdminDashboard() {
                     </div>
                   )}
 
-                {ESTADOS[selectedOrder.estado].siguientes.length > 0 ? (
+                {siguientesDe(selectedOrder.estado, selectedOrder.metodoPago).length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {ESTADOS[selectedOrder.estado].siguientes.map((siguiente) => (
+                    {siguientesDe(selectedOrder.estado, selectedOrder.metodoPago).map((siguiente) => (
                       <button
                         key={siguiente}
                         onClick={() => handleStatusChange(selectedOrder.id, siguiente)}
                         disabled={moviendoEstado}
                         className={`px-3 py-2 rounded-lg font-bold text-[11px] uppercase tracking-wider transition-colors disabled:opacity-50 ${
-                          siguiente === 'CANCELADO'
+                          siguiente === 'CANCELADO' || siguiente === 'DEVOLUCION'
                             ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
                             : 'bg-neutral-900 text-white hover:bg-black'
                         }`}
                       >
-                        {siguiente === 'CANCELADO' ? 'Cancelar / Devolución' : `Pasar a ${ESTADOS[siguiente].label}`}
+                        {siguiente === 'CANCELADO'
+                          ? 'Cancelar pedido'
+                          : siguiente === 'DEVOLUCION'
+                            ? 'Registrar devolución'
+                            : siguiente === 'CONFIRMADO'
+                              ? 'Confirmar pago recibido'
+                              : siguiente === 'PENDIENTE_ALISTAMIENTO' &&
+                                  selectedOrder.estado === 'PENDIENTE_PAGO'
+                                ? 'Alistar (se cobra al entregar)'
+                                  : siguiente === 'ENTREGADO' &&
+                                      selectedOrder.metodoPago === 'CONTRAENTREGA'
+                                    ? 'Entregado y cobrado'
+                                    : `Pasar a ${ESTADOS[siguiente].label}`}
                       </button>
                     ))}
                   </div>

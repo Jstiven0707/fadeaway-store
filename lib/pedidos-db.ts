@@ -338,11 +338,12 @@ export const cambiarEstado = async (
     }
 
     const actual = filas[0].estado as EstadoOrden;
+    const metodo = filas[0].metodo_pago as MetodoPago;
     if (actual === nuevo) {
       await conn.rollback();
       throw new ErrorPedido('El pedido ya está en ese estado');
     }
-    if (!puedeAvanzarA(actual, nuevo)) {
+    if (!puedeAvanzarA(actual, nuevo, metodo)) {
       await conn.rollback();
       throw new ErrorPedido(`No se puede pasar de ${actual} a ${nuevo}`);
     }
@@ -362,7 +363,6 @@ export const cambiarEstado = async (
     // El pago queda registrado en el momento en que el dinero entra:
     //   - transferencia (Nequi/Daviplata): al confirmarla
     //   - contraentrega: al entregar, que es cuando el cliente paga
-    const metodo = filas[0].metodo_pago as MetodoPago;
     const esMomentoDelPago =
       (nuevo === 'CONFIRMADO' && metodo !== 'CONTRAENTREGA') ||
       (nuevo === 'ENTREGADO' && metodo === 'CONTRAENTREGA');

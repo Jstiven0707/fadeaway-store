@@ -105,12 +105,83 @@ export const METODOS_PAGO: Record<MetodoPago, { label: string; desc: string; ant
   CONTRAENTREGA: { label: 'Pago Contraentrega', desc: 'Pagas al recibir', anticipado: false },
 };
 
-/** Estado con el que nace un pedido segun como se vaya a pagar. */
-export const estadoInicial = (metodo: MetodoPago): EstadoOrden =>
-  METODOS_PAGO[metodo].anticipado ? 'PENDIENTE_PAGO' : 'CONFIRMADO';
+/**
+ * Todo pedido nace sin pagar, incluido el contraentrega.
+ *
+ * Antes el contraentrega nacía CONFIRMADO, lo que daba a entender que la plata
+ * ya había entrado cuando en realidad no se cobra hasta entregar.
+ */
+export const estadoInicial = (_metodo: MetodoPago): EstadoOrden => 'PENDIENTE_PAGO';
 
-export const puedeAvanzarA = (desde: EstadoOrden, hasta: EstadoOrden) =>
-  ESTADOS[desde].siguientes.includes(hasta);
+/**
+ * A dónde puede moverse un pedido, que no depende solo del estado sino de
+ * cómo se paga.
+ *
+ * La diferencia está en PENDIENTE_PAGO:
+ *   - anticipado: hay un comprobante que revisar, así que pasa por CONFIRMADO
+ *   - contraentrega: no hay nada que confirmar todavía, así que va derecho a
+ *     alistamiento y el cobro se resuelve solo al entregar
+ */
+export const siguientesDe = (desde: EstadoOrden, metodo: MetodoPago): EstadoOrden[] => {
+  if (desde === 'PENDIENTE_PAGO' && !METODOS_PAGO[metodo].anticipado) {
+    return ['PENDIENTE_ALISTAMIENTO', 'CANCELADO'];
+  }
+  return ESTADOS[desde].siguientes;
+};
+
+export const puedeAvanzarA = (desde: EstadoOrden, hasta: EstadoOrden, metodo: MetodoPago) =>
+  siguientesDe(desde, metodo).includes(hasta);
+
+// ---------------------------------------------------------------------------
+// ESTADO DEL DINERO
+//
+// Es una lectura del pedido, no una columna: se deduce del estado logístico y
+// del método. Así no hay dos verdades que puedan quedar desalineadas.
+// ---------------------------------------------------------------------------
+
+export type EstadoPago = 'ESPERANDO_COMPROBANTE' | 'SE_COBRA_AL_ENTREGAR' | 'PAGADO' | 'DEVUELTO';
+
+export const ESTADOS_PAGO: Record<EstadoPago, { label: string; corto: string; color: string; ayuda: string }> = {
+  ESPERANDO_COMPROBANTE: {
+    label: 'Esperando comprobante',
+    corto: 'Sin pagar',
+    color: 'bg-amber-100 text-amber-800 border-amber-200',
+    ayuda: 'El cliente debe transferir y enviarte el soporte. Hasta que no lo veas, no lo confirmes.',
+  },
+  SE_COBRA_AL_ENTREGAR: {
+    label: 'Se cobra al entregar',
+    corto: 'Cobra al entregar',
+    color: 'bg-sky-100 text-sky-800 border-sky-200',
+    ayuda: 'No hay nada que confirmar: el dinero entra cuando lo entregues. Puedes alistarlo ya.',
+  },
+  PAGADO: {
+    label: 'Pagado',
+    corto: 'Pagado',
+    color: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    ayuda: 'La plata ya entró y quedó registrada en Ventas.',
+  },
+  DEVUELTO: {
+    label: 'Devuelto',
+    corto: 'Devuelto',
+    color: 'bg-orange-100 text-orange-800 border-orange-200',
+    ayuda: 'El pedido volvió y el cobro quedó reversado en Ventas.',
+  },
+};
+
+/** En qué va el dinero de este pedido, mirando estado y método juntos. */
+export const estadoPagoDe = (pedido: { estado: EstadoOrden; metodoPago: MetodoPago }): EstadoPago => {
+  if (pedido.estado === 'DEVOLUCION') return 'DEVUELTO';
+
+  if (METODOS_PAGO[pedido.metodoPago].anticipado) {
+    // Prepago: la plata entra al confirmar el comprobante
+    return pedido.estado === 'PENDIENTE_PAGO' || pedido.estado === 'CANCELADO'
+      ? 'ESPERANDO_COMPROBANTE'
+      : 'PAGADO';
+  }
+
+  // Contraentrega: la plata entra al poner el producto en manos del cliente
+  return pedido.estado === 'ENTREGADO' ? 'PAGADO' : 'SE_COBRA_AL_ENTREGAR';
+};
 
 // --- ESTRUCTURAS ---
 
