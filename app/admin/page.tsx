@@ -1127,12 +1127,23 @@ export default function AdminDashboard() {
                             </span>
                           </td>
                           <td className="p-4 text-center">
-                            <button
-                              onClick={() => setSelectedOrder(order)}
-                              className="bg-neutral-900 hover:bg-black text-white px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
-                            >
-                              Gestionar
-                            </button>
+                            <div className="flex gap-2 justify-center">
+                              <button
+                                onClick={() => setSelectedOrder(order)}
+                                className="bg-neutral-900 hover:bg-black text-white px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                Gestionar
+                              </button>
+                              {/* La etiqueta se abre aparte para poder imprimirla
+                                  sin arrastrar el panel entero al papel. */}
+                              <button
+                                onClick={() => window.open(`/admin/etiqueta/${order.id}`, '_blank')}
+                                title="Abrir la etiqueta de envío para imprimir"
+                                className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 px-3 py-1.5 rounded-lg font-bold text-[11px] transition-colors"
+                              >
+                                🏷
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
